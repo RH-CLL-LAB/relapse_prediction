@@ -1,0 +1,20 @@
+from helpers.sql_helper import *
+from helpers.preprocessing_helper import *
+
+
+DIAG_LOOKUP_TABLE = load_data_from_table(
+    "Codes_DST_DIAG_CODES", subset_columns=["Kode", "Tekst"]
+)
+
+ATC_LOOKUP_TABLE = load_data_from_table(
+    "Codes_ATC", subset_columns=["class_code", "class_name"]
+)
+NPU_LOOKUP_TABLE = load_data_from_table(
+    "Codes_NPU", subset_columns=["NPU code", "Component"]
+)
+
+# NOTE: NPU_aggregation also removes a lot of information!
+# Is this a feature or a bug? Should probably include both!
+
+
+ATC_LOOKUP_TABLE = ATC_LOOKUP_TABLE.drop_duplicates()
