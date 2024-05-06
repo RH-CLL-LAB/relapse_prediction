@@ -276,6 +276,7 @@ DATE_CONVERTER = {
     "view_sds_t_adm_t_diag": date_from_date,
     "view_sds_t_adm_t_sksopr": date_from_date,
     "view_sds_t_adm_t_sksube": date_from_date,
+    "view_sp_vitalevaerdier": date_from_date,
     "LAB_Flowcytometry": date_from_date,
     "LAB_IGHVIMGT": date_from_date,
 }

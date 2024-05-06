@@ -1,6 +1,6 @@
 from helpers.sql_helper import *
 from helpers.preprocessing_helper import *
-from wide_data import lyfo_cohort
+from data_processing.wide_data import lyfo_cohort
 
 blood_tests = download_and_rename_data(
     "view_sp_bloddyrkning_del1",

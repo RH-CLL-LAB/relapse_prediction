@@ -1,135 +1,3 @@
-import pandas as pd
-import polars as pl
-import numpy as np
-import datetime as dt
-from timeseriesflattener.aggregators import (
-    MaxAggregator,
-    MinAggregator,
-    MeanAggregator,
-    CountAggregator,
-    SumAggregator,
-    VarianceAggregator,
-    HasValuesAggregator,
-    SlopeAggregator,
-    LatestAggregator,
-    EarliestAggregator,
-)
-from feature_specification import feature_specs
-
-# from load_to_long_format import *
-# NOTE: make the relevant path to the feature maker
-from feature_maker.scripts.feature_maker import FeatureMaker
-
-CACHED_DATA = True
-EXCLUDE_PROXIES = False
-
-if CACHED_DATA:
-    WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
-    LONG_DATA = pd.read_pickle("data/LONG_DATA.pkl")
-else:
-    from preprocess_data import WIDE_DATA, LONG_DATA
-
-# get proxies out
-if EXCLUDE_PROXIES:
-    WIDE_DATA.loc[WIDE_DATA["proxy_death"] == 1, "relapse_label"] = 9
-    WIDE_DATA.loc[WIDE_DATA["proxy_death"] == 1, "relapse_date"] = pd.NaT
-
-for column in WIDE_DATA.columns:
-    if "date" in column:
-        WIDE_DATA[column] = pd.to_datetime(WIDE_DATA[column])
-
-LONG_DATA["patientid"] = LONG_DATA["patientid"].astype(int)
-
-feature_maker = FeatureMaker(
-    long_data=LONG_DATA,
-    wide_data=WIDE_DATA,
-)
-
-feature_maker._reset_all_features()
-feature_maker.specify_prediction_time_from_wide_format("date_treatment_1st_line")
-
-
-# Remove response evaluation - leakage
-list_of_exclusion_terms = [
-    "date",
-    "2nd_line",
-    "relapse",
-    "OS",
-    "LYFO",
-    "report_submitted",
-    "dead",
-    "FU",
-    "patientid",
-    "1st_line",
-    "death",
-    "treatment",
-    "age",
-    "proxy",
-    "dato",
-    "_dt",
-]
-
-static_predictors = [
-    x
-    for x in feature_maker.wide_data.columns
-    if not any([exclusion_term in x for exclusion_term in list_of_exclusion_terms])
-]
-
-
-for static_predictor in static_predictors:
-    static_predictor_specification = {
-        "data_source": "RKKP_LYFO",
-        "value_column": static_predictor,
-        "fallback": -1,
-        "feature_base_name": f"RKKP_LYFO_{static_predictor}",
-    }
-    feature_maker.add_static_feature(static_predictor_specification)
-
-
-for feature_spec in feature_specs:
-    feature_maker.add_features_given_ratio(
-        data_source=feature_spec.get("data_source"),
-        agg_funcs=feature_spec.get("agg_funcs"),
-        lookbacks=[dt.timedelta(90), dt.timedelta(365), dt.timedelta(365 * 5)],
-        proportion=feature_spec.get("proportion"),
-        fallback=-1,
-    )
-
-
-# NOTE: with the fucking bing bong -1 fix, we're getting
-# bad results here - there must also be some information leakage here
-
-feature_maker.wide_data["relapse_label"].value_counts()
-translation_dict = {9: 0, 1: 1}  # 0: np.NAN
-
-feature_maker.wide_data["relapse"] = feature_maker.wide_data["relapse_label"].apply(
-    lambda x: translation_dict.get(x)
-)
-
-
-feature_maker.wide_data.loc[
-    feature_maker.wide_data["relapse_date"] == -1, "relapse_date"
-] = pd.NaT
-
-feature_maker.add_outcome_from_wide_format(
-    "date_death", "proxy_death", [dt.timedelta(730)], [MaxAggregator()]
-)
-
-feature_maker.add_outcome_from_wide_format(
-    "relapse_date", "relapse", [dt.timedelta(730)], [MaxAggregator()]
-)
-
-if __name__ == "__main__":
-    feature_maker.make_all_features()
-    feature_matrix = feature_maker.create_feature_matrix(None)
-    feature_matrix.to_pickle("results/feature_matrix.pkl")
-
-feature_matrix = pd.read_pickle("results/feature_matrix.pkl")
-
-# NOTE: OKAYYYY SEEMS LIKE NPU CODES ARE NOW NOT TRANSLATED
-# YES ALRIGHT WUHU
-
-
 # model the outcomes
 from sklearn.model_selection import train_test_split
 import pandas as pd
@@ -145,6 +13,8 @@ from sklearn.metrics import (
 )
 from tqdm import tqdm
 
+feature_matrix = pd.read_pickle("results/feature_matrix.pkl")
+
 # feature_matrix.columns = feature_matrix.columns.str.replace("<", "less_than")
 
 # feature_matrix.columns = feature_matrix.columns.str.replace(",", "_comma_")
@@ -156,11 +26,6 @@ from tqdm import tqdm
 
 outcome_column = [x for x in feature_matrix if "outc" in x]
 outcome = outcome_column[1]
-feature_matrix.loc[
-    feature_matrix["outc_relapse_within_0_to_730_days_max_fallback_0"] == -1,
-    "outc_relapse_within_0_to_730_days_max_fallback_0",
-] = 0
-
 col_to_leave = [
     "patientid",
     "timestamp",
@@ -273,6 +138,7 @@ for x_, y_ in [(X_test, y_test), (X_test_specific, y_test_specific)]:
     print(confusion_matrix(y_.values, y_pred))
 # pd.DataFrame(results).to_pickle("results/initial_tests.pkl")
 
+
 parameters = bst.get_booster().get_score(importance_type="weight")
 
 score_df = pd.DataFrame(parameters.values(), index=parameters.keys(), columns=["score"])
@@ -355,12 +221,3 @@ import matplotlib.pyplot as plt
 
 plt.figure(figsize=(4, 8))
 sns.barplot(data=lab_df, x="score", y="index", order=order)
-
-
-vitals_df = score_df[score_df["data_modality"] == "vitals"].head(30)
-
-order = vitals_df["index"].head(30)
-import matplotlib.pyplot as plt
-
-plt.figure(figsize=(4, 8))
-sns.barplot(data=vitals_df, x="score", y="index", order=order)

@@ -1,6 +1,6 @@
 from helpers.sql_helper import *
 from helpers.preprocessing_helper import *
-from wide_data import lyfo_cohort
+from data_processing.wide_data import lyfo_cohort
 
 adm_medicine_days = download_and_rename_data(
     "adm_medicine",

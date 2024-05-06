@@ -9,6 +9,15 @@ from data_processing.blood_tests import *
 from data_processing.lyfo_aki import *
 from data_processing.wide_data import *
 
+# performance status and IPIs for the patients
+
+IPIs = pd.read_csv(
+    "../../../../../projects2/dalyca_r/clean_r/shared_projects/end_of_project_scripts_to_gihub/DALYCARE_methods/output/IPI_2.csv",
+    sep=";",
+)
+
+WIDE_DATA = WIDE_DATA.merge(IPIs[["patientid", "PS", "IPI"]], how="left")
+
 TABLE_TO_LONG_FORMAT_MAPPING = {
     "SDS_pato": {
         "d_rekvdato": "timestamp",
@@ -47,6 +56,14 @@ TABLE_TO_LONG_FORMAT_MAPPING = {
         "patientid": "patientid",
         "date_diagnosis": "timestamp",
         "diagnosis": "variable_code",
+    },
+    # NOTE: some of these variables are
+    # categorical (bevidsthedsniveau)
+    "view_sp_vitalevaerdier": {
+        "patientid": "patientid",
+        "recorded_date": "timestamp",
+        "displayname": "variable_code",
+        "meas_value_clean": "value",
     },
 }
 
@@ -171,6 +188,15 @@ data_dict["PERSIMUNE_biochemistry"] = (
     .reset_index(drop=True)
 )
 
+data_dict["SDS_pato"] = (
+    data_dict["SDS_pato"]
+    .merge(SNOMED_LOOKUP_TABLE, left_on="variable_code", right_on="SKSkode")[
+        ["patientid", "timestamp", "data_source", "Kodetekst"]
+    ]
+    .rename(columns={"Kodetekst": "variable_code"})
+    .reset_index(drop=True)
+)
+
 
 data_dict["SP_SocialHx"] = social_history_data
 data_dict["view_sp_bloddyrkning_del1"] = blood_tests
@@ -187,30 +213,30 @@ unix_dates = [
 
 for date_list in tqdm([timestamp_dates, unix_dates]):
     if date_list == timestamp_dates:
-        LONG_DATA.loc[LONG_DATA["data_source"].isin(date_list), "timestamp"] = (
-            pd.to_datetime(
-                LONG_DATA[LONG_DATA["data_source"].isin(date_list)]["timestamp"],
-                unit="s",
-                errors="coerce",
-            ).dt.date
-        )
+        LONG_DATA.loc[
+            LONG_DATA["data_source"].isin(date_list), "timestamp"
+        ] = pd.to_datetime(
+            LONG_DATA[LONG_DATA["data_source"].isin(date_list)]["timestamp"],
+            unit="s",
+            errors="coerce",
+        ).dt.date
     elif date_list == unix_dates:
-        LONG_DATA.loc[LONG_DATA["data_source"].isin(date_list), "timestamp"] = (
-            pd.to_datetime(
-                LONG_DATA[LONG_DATA["data_source"].isin(date_list)]["timestamp"],
-                origin="unix",
-                unit="d",
-                errors="coerce",
-            ).dt.date
-        )
+        LONG_DATA.loc[
+            LONG_DATA["data_source"].isin(date_list), "timestamp"
+        ] = pd.to_datetime(
+            LONG_DATA[LONG_DATA["data_source"].isin(date_list)]["timestamp"],
+            origin="unix",
+            unit="d",
+            errors="coerce",
+        ).dt.date
 
 LONG_DATA["timestamp"] = pd.to_datetime(LONG_DATA["timestamp"])
 
 # stupid fix for getting variables to work with value for pato and diagnoses
 
-LONG_DATA.loc[LONG_DATA["data_source"].isin(["SDS_pato", "diagnoses_all"]), "value"] = (
-    1  # doesn't matter what value this is
-)
+LONG_DATA.loc[
+    LONG_DATA["data_source"].isin(["SDS_pato", "diagnoses_all"]), "value"
+] = 1  # doesn't matter what value this is
 
 translation_dict = {"Negative": 0, "Positive": 1}
 
@@ -229,8 +255,12 @@ LONG_DATA.loc[
     lambda x: translation_dict.get(x, -1)
 )
 
+LONG_DATA.loc[LONG_DATA["data_source"] == "LYFO_AKI", "variable_code"] = "n_aki"
+
 LONG_DATA.loc[LONG_DATA["value"].isna(), "value"] = 1
 
-WIDE_DATA.to_pickle("data/relapse_data/WIDE_DATA.pkl")
+LONG_DATA["patientid"] = LONG_DATA["patientid"].astype(int)
 
-LONG_DATA.to_pickle("data/relapse_data/LONG_DATA.pkl")
+WIDE_DATA.to_pickle("data/WIDE_DATA.pkl")
+
+LONG_DATA.to_pickle("data/LONG_DATA.pkl")

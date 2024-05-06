@@ -1,6 +1,6 @@
 from helpers.sql_helper import *
 from helpers.preprocessing_helper import *
-from wide_data import lyfo_cohort_strings
+from data_processing.wide_data import lyfo_cohort_strings
 
 PERSIMUNE_MAPPING = {
     "PERSIMUNE_biochemistry": {
