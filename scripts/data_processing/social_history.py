@@ -3,7 +3,7 @@ from helpers.preprocessing_helper import *
 from data_processing.wide_data import lyfo_cohort
 
 social_history_dict = {
-    "SP_SocialHx": {
+    "SP_SocialHX": {
         "patientid": "patientid",
         "registringsdato": "timestamp",
         "ryger": "smoking_cat",
@@ -13,8 +13,10 @@ social_history_dict = {
     }
 }
 
+[x for x in IMPORT_PUBLIC if "SP_Soci" in x]
+
 social_history_data = download_and_rename_data(
-    "SP_SocialHx",
+    "SP_SocialHX",
     social_history_dict,
     cohort=lyfo_cohort,
 )

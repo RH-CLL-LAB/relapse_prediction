@@ -3,12 +3,13 @@ from helpers.preprocessing_helper import *
 from data_processing.wide_data import lyfo_cohort
 
 blood_tests = download_and_rename_data(
-    "view_sp_bloddyrkning_del1",
+    "SP_Bloddyrkning_Del1",
     {
-        "view_sp_bloddyrkning_del1": {
+        "SP_Bloddyrkning_Del1": {
             "patientid": "patientid",
             "komponentnavn": "variable_code",
-            "pr_vetagningstidspunkt_dato": "timestamp",
+            "prøvetagningstidspunkt": "timestamp",
+            "prøveresultat": "value",
         }
     },
     cohort=lyfo_cohort,

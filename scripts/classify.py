@@ -68,7 +68,7 @@ for disease in diseases:
                 non_long_features = [
                     x
                     for x in feature_matrix_copy.columns
-                    if "_1825_" or "_360_" not in x
+                    if "_1825_" not in x and "_365_" not in x
                 ]
                 feature_matrix_copy = feature_matrix_copy[non_long_features]
 
@@ -108,12 +108,12 @@ for disease in diseases:
 
                 bst = XGBClassifier(
                     missing=-1,
-                    n_estimators=1000,
+                    n_estimators=1000,  # 2000 was great, but it's just too slow
                     learning_rate=0.30,
                     max_depth=3,
                     min_child_weight=5,
                     gamma=0,
-                    subsample=0.4,
+                    subsample=0.9,
                     colsample_bytree=0.9,
                     objective="binary:logistic",
                     nthread=6,

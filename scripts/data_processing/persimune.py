@@ -32,6 +32,22 @@ persimune_dict = {
     for table_name in PERSIMUNE_MAPPING
 }
 
+persimune_dict["PERSIMUNE_leukocytes"] = download_and_rename_data(
+    "PERSIMUNE_biochemistry",
+    {
+        "PERSIMUNE_biochemistry": {
+            "patientid": "patientid",
+            "samplingdatetime": "timestamp",
+            "analysiscode": "variable_code",
+            "c_resultvaluenumeric": "value",
+        }
+    },
+    cohort=lyfo_cohort_strings,
+)
+persimune_dict["PERSIMUNE_leukocytes"]["data_source"] = "PERSIMUNE_leukocytes"
+# overall leukocytes
+# persimune_dict["PERSIMUNE_leukocytes"]["variable_code"] = "all"
+
 for dataset in persimune_dict:
     persimune_dict[dataset]["patientid"] = persimune_dict[dataset]["patientid"].astype(
         int
