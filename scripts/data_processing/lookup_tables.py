@@ -23,3 +23,5 @@ SNOMED_LOOKUP_TABLE = load_data_from_table(
 
 
 ATC_LOOKUP_TABLE = ATC_LOOKUP_TABLE.drop_duplicates()
+
+ATC_LOOKUP_TABLE["class_name"] = ATC_LOOKUP_TABLE["class_name"].str.lower()

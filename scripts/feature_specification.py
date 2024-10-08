@@ -11,35 +11,98 @@ from timeseriesflattener.aggregators import (
     EarliestAggregator,
 )
 
-# NOTE: Ask Casper to include data source in views
-# NOTE: Include year of treatment as a feature in wide_data
-# NOTE: Use epikur and ekokur instead of RECEPTDATA_clean
-# NOTE: Is EPIKUR and EKOKUR the same....?????????
-# NOTE: SP_lab_forsker should be in included
-
 feature_specs = [
-    # {
-    #     "data_source": "medicine",
-    #     "agg_funcs": [CountAggregator(), SumAggregator()],
-    #     "proportion": 0.1,
-    # },
     {
-        "data_source": "adm_medicine",
+        "data_source": "medicine_general",
         "agg_funcs": [
             CountAggregator(),
-            SumAggregator(),
-            SlopeAggregator(timestamp_col_name="timestamp"),
+            # SumAggregator(),
+            # LatestAggregator(timestamp_col_name="timestamp"),
         ],
         "proportion": 0.1,
     },
     {
-        "data_source": "SP_OrdineretMedicin",
-        "agg_funcs": [CountAggregator(), SumAggregator()],
+        "data_source": "medicine_1825_days_count",
+        "agg_funcs": [
+            CountAggregator(),
+            SumAggregator(),
+        ],
         "proportion": 0.1,
     },
     {
-        "data_source": "SDS_epikur",
-        "agg_funcs": [CountAggregator(), SumAggregator()],
+        "data_source": "medicine_365_days_count",
+        "agg_funcs": [
+            CountAggregator(),
+            SumAggregator(),
+        ],
+        "proportion": 0.1,
+    },
+    {
+        "data_source": "medicine_90_days_count",
+        "agg_funcs": [
+            CountAggregator(),
+            SumAggregator(),
+        ],
+        "proportion": 0.1,
+    },
+    {
+        "data_source": "medicine_1825_days_cumulative",
+        "agg_funcs": [
+            SumAggregator(),
+        ],
+        "proportion": 0.1,
+    },
+    {
+        "data_source": "medicine_365_days_cumulative",
+        "agg_funcs": [
+            SumAggregator(),
+        ],
+        "proportion": 0.1,
+    },
+    {
+        "data_source": "medicine_90_days_cumulative",
+        "agg_funcs": [
+            SumAggregator(),
+        ],
+        "proportion": 0.1,
+    },
+    {
+        "data_source": "LAB_IGHVIMGT",
+        "agg_funcs": [
+            # CountAggregator(),
+            # SumAggregator(),
+            LatestAggregator(timestamp_col_name="timestamp"),
+        ],
+        "proportion": 0.1,
+    },
+    {
+        "data_source": "LAB_BIOBANK_SAMPLES",
+        "agg_funcs": [
+            # CountAggregator(),
+            # SumAggregator(),
+            LatestAggregator(timestamp_col_name="timestamp"),
+        ],
+        "proportion": 0.1,
+    },
+    {
+        "data_source": "LAB_Flowcytometry",
+        "agg_funcs": [
+            # CountAggregator(),
+            # SumAggregator(),
+            LatestAggregator(timestamp_col_name="timestamp"),
+        ],
+        "proportion": 0.1,
+    },
+    {
+        "data_source": "labmeasurements",
+        "agg_funcs": [
+            CountAggregator(),
+            # SumAggregator(),
+            MaxAggregator(),
+            SlopeAggregator(timestamp_col_name="timestamp"),
+            MinAggregator(),
+            LatestAggregator(timestamp_col_name="timestamp"),
+        ],
         "proportion": 0.1,
     },
     {
@@ -52,54 +115,6 @@ feature_specs = [
         "agg_funcs": [CountAggregator(), SumAggregator()],
         "proportion": 0.1,
     },
-    {
-        "data_source": "laboratorymeasurements",
-        "agg_funcs": [
-            LatestAggregator(timestamp_col_name="timestamp"),
-            CountAggregator(),
-            MeanAggregator(),
-            MaxAggregator(),
-            MinAggregator(),
-            SlopeAggregator(timestamp_col_name="timestamp"),
-            SumAggregator(),
-            VarianceAggregator(),
-        ],
-        "proportion": 0.1,
-    },
-    {
-        "data_source": "SP_AlleProvesvar",
-        "agg_funcs": [
-            LatestAggregator(timestamp_col_name="timestamp"),
-            CountAggregator(),
-            MeanAggregator(),
-            MaxAggregator(),
-            MinAggregator(),
-            SlopeAggregator(timestamp_col_name="timestamp"),
-            SumAggregator(),
-            VarianceAggregator(),
-        ],
-        "proportion": 0.1,
-    },
-    {
-        "data_source": "laboratorymeasurements_concat",  # does this actually make sense?
-        "agg_funcs": [
-            LatestAggregator(timestamp_col_name="timestamp"),
-            CountAggregator(),
-            MeanAggregator(),
-            MaxAggregator(),
-            MinAggregator(),
-        ],
-        "proportion": 0.1,
-    },
-    {
-        "data_source": "RECEPTDATA_CLEAN",
-        "agg_funcs": [
-            CountAggregator(),
-            SumAggregator(),
-            SlopeAggregator(timestamp_col_name="timestamp"),
-        ],
-        "proportion": 0.1,
-    },
     {"data_source": "SDS_pato", "agg_funcs": [CountAggregator()], "proportion": 0.1},
     {
         "data_source": "diagnoses_all",
@@ -110,29 +125,31 @@ feature_specs = [
         "proportion": 0.1,
     },
     {
+        "data_source": "poly_pharmacy",
+        "agg_funcs": [
+            CountAggregator(),
+        ],
+        "proportion": 0.1,
+    },
+    {
+        "data_source": "diagnoses_all_comorbidity",
+        "agg_funcs": [
+            CountAggregator(),
+        ],
+        "proportion": 0.1,
+    },
+    {
         "data_source": "SP_SocialHx",
         "agg_funcs": [LatestAggregator(timestamp_col_name="timestamp")],
         "proportion": 0.1,
     },
     {
         "data_source": "SP_Bloddyrkning_Del1",
-        "agg_funcs": [CountAggregator()],
-        "proportion": 0.1,
-    },
-    # {
-    #    "data_source": "LYFO_AKI",
-    #    "agg_funcs": [MaxAggregator()],
-    #    "proportion": 0.0,
-    # },
-    {
-        "data_source": "PERSIMUNE_biochemistry",
         "agg_funcs": [
             CountAggregator(),
-            MeanAggregator(),
-            SlopeAggregator(timestamp_col_name="timestamp"),
+            SumAggregator(),
             LatestAggregator(timestamp_col_name="timestamp"),
             MaxAggregator(),
-            MinAggregator(),
         ],
         "proportion": 0.1,
     },
@@ -148,7 +165,7 @@ feature_specs = [
         "proportion": 0.1,
     },
     {
-        "data_source": "diagnosis_all_comorbidity",
+        "data_source": "PERSIMUNE_radiology",
         "agg_funcs": [
             CountAggregator(),
         ],
@@ -173,43 +190,6 @@ feature_specs = [
         "proportion": 0.1,
     },
     {
-        "data_source": "view_laboratorymeasuments_c_groups",
-        "agg_funcs": [
-            CountAggregator(),
-        ],
-        "proportion": 0.1,
-    },
-    # {
-    #     "data_source": "medicine_days",
-    #     "agg_funcs": [
-    #         CountAggregator(),
-    #         MeanAggregator(),
-    #         MaxAggregator(),
-    #         SumAggregator(),
-    #     ],
-    #     "proportion": 0.1,
-    # },
-    {
-        "data_source": "adm_medicine_days",
-        "agg_funcs": [
-            CountAggregator(),
-            MeanAggregator(),
-            MaxAggregator(),
-            SumAggregator(),
-        ],
-        "proportion": 0.1,
-    },
-    {
-        "data_source": "SP_OrdineretMedicin_days",
-        "agg_funcs": [
-            CountAggregator(),
-            MeanAggregator(),
-            MaxAggregator(),
-            SumAggregator(),
-        ],
-        "proportion": 0.1,
-    },
-    {
         "data_source": "SP_VitaleVaerdier",
         "agg_funcs": [
             CountAggregator(),
@@ -221,4 +201,187 @@ feature_specs = [
         ],
         "proportion": 0.1,
     },
+    {
+        "data_source": "gene_alterations",
+        "agg_funcs": [CountAggregator(), SumAggregator()],
+        "proportion": 0.01,
+    },
 ]
+
+# feature_specs = [
+#     {
+#         "data_source": "medicine_general",
+#         "agg_funcs": [
+#             CountAggregator(),
+#             # SumAggregator(),
+#             # LatestAggregator(timestamp_col_name="timestamp"),
+#         ],
+#         "proportion": 0.1,
+#     },
+#     {
+#         "data_source": "medicine_1080_days_count",
+#         "agg_funcs": [
+#             CountAggregator(),
+#             SumAggregator(),
+#         ],
+#         "proportion": 0.1,
+#     },
+#     {
+#         "data_source": "medicine_365_days_count",
+#         "agg_funcs": [
+#             CountAggregator(),
+#             SumAggregator(),
+#         ],
+#         "proportion": 0.1,
+#     },
+#     {
+#         "data_source": "medicine_90_days_count",
+#         "agg_funcs": [
+#             CountAggregator(),
+#             SumAggregator(),
+#         ],
+#         "proportion": 0.1,
+#     },
+#     {
+#         "data_source": "medicine_1080_days_cumulative",
+#         "agg_funcs": [
+#             SumAggregator(),
+#         ],
+#         "proportion": 0.1,
+#     },
+#     {
+#         "data_source": "medicine_365_days_cumulative",
+#         "agg_funcs": [
+#             SumAggregator(),
+#         ],
+#         "proportion": 0.1,
+#     },
+#     {
+#         "data_source": "medicine_90_days_cumulative",
+#         "agg_funcs": [
+#             SumAggregator(),
+#         ],
+#         "proportion": 0.1,
+#     },
+#     {
+#         "data_source": "LAB_IGHVIMGT",
+#         "agg_funcs": [
+#             # CountAggregator(),
+#             # SumAggregator(),
+#             LatestAggregator(timestamp_col_name="timestamp"),
+#         ],
+#         "proportion": 0.001,
+#     },
+#     {
+#         "data_source": "LAB_BIOBANK_SAMPLES",
+#         "agg_funcs": [
+#             # CountAggregator(),
+#             # SumAggregator(),
+#             LatestAggregator(timestamp_col_name="timestamp"),
+#         ],
+#         "proportion": 0.001,
+#     },
+#     {
+#         "data_source": "LAB_Flowcytometry",
+#         "agg_funcs": [
+#             # CountAggregator(),
+#             # SumAggregator(),
+#             LatestAggregator(timestamp_col_name="timestamp"),
+#         ],
+#         "proportion": 0.001,
+#     },
+#     {
+#         "data_source": "labmeasurements",
+#         "agg_funcs": [
+#             CountAggregator(),
+#             # SumAggregator(),
+#             MaxAggregator(),
+#             SlopeAggregator(timestamp_col_name="timestamp"),
+#             MinAggregator(),
+#             LatestAggregator(timestamp_col_name="timestamp"),
+#         ],
+#         "proportion": 0.001,
+#     },
+#     {
+#         "data_source": "sks_referals",
+#         "agg_funcs": [CountAggregator(), SumAggregator()],
+#         "proportion": 0.1,
+#     },
+#     {
+#         "data_source": "sks_at_the_hospital",
+#         "agg_funcs": [CountAggregator(), SumAggregator()],
+#         "proportion": 0.1,
+#     },
+#     {"data_source": "SDS_pato", "agg_funcs": [CountAggregator()], "proportion": 0.1},
+#     {
+#         "data_source": "diagnoses_all",
+#         "agg_funcs": [
+#             CountAggregator(),
+#             LatestAggregator(timestamp_col_name="timestamp"),
+#         ],
+#         "proportion": 0.05,
+#     },
+#     {
+#         "data_source": "diagnoses_all_comorbidity",
+#         "agg_funcs": [
+#             CountAggregator(),
+#         ],
+#         "proportion": 0.1,
+#     },
+#     {
+#         "data_source": "SP_SocialHx",
+#         "agg_funcs": [LatestAggregator(timestamp_col_name="timestamp")],
+#         "proportion": 0.01,
+#     },
+#     {
+#         "data_source": "SP_Bloddyrkning_Del1",
+#         "agg_funcs": [
+#             CountAggregator(),
+#             SumAggregator(),
+#             LatestAggregator(timestamp_col_name="timestamp"),
+#             MaxAggregator(),
+#         ],
+#         "proportion": 0.01,
+#     },
+#     {
+#         "data_source": "PERSIMUNE_leukocytes",
+#         "agg_funcs": [
+#             MeanAggregator(),
+#             SlopeAggregator(timestamp_col_name="timestamp"),
+#             MaxAggregator(),
+#             MinAggregator(),
+#             CountAggregator(),
+#         ],
+#         "proportion": 0.05,
+#     },
+#     {
+#         "data_source": "SP_BilleddiagnostiskeUndersøgelser_Del1",
+#         "agg_funcs": [
+#             CountAggregator(),
+#             LatestAggregator(timestamp_col_name="timestamp"),
+#         ],
+#         "proportion": 0.01,
+#     },
+#     {
+#         "data_source": "PERSIMUNE_microbiology_analysis",
+#         "agg_funcs": [CountAggregator(), MaxAggregator()],
+#         "proportion": 0.01,
+#     },
+#     {
+#         "data_source": "PERSIMUNE_microbiology_culture",
+#         "agg_funcs": [CountAggregator(), MaxAggregator()],
+#         "proportion": 0.01,
+#     },
+#     {
+#         "data_source": "SP_VitaleVaerdier",
+#         "agg_funcs": [
+#             CountAggregator(),
+#             MeanAggregator(),
+#             MaxAggregator(),
+#             LatestAggregator(timestamp_col_name="timestamp"),
+#             SlopeAggregator(timestamp_col_name="timestamp"),
+#             MinAggregator(),
+#         ],
+#         "proportion": 0.1,
+#     },
+# ]

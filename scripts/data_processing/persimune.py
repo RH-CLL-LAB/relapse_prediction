@@ -3,12 +3,6 @@ from helpers.preprocessing_helper import *
 from data_processing.wide_data import lyfo_cohort_strings
 
 PERSIMUNE_MAPPING = {
-    "PERSIMUNE_biochemistry": {
-        "patientid": "patientid",
-        "samplingdatetime": "timestamp",
-        "analysiscode": "variable_code",
-        "c_resultvaluenumeric": "value",
-    },
     "PERSIMUNE_microbiology_analysis": {
         "patientid": "patientid",
         "samplingdatetime": "timestamp",
@@ -32,6 +26,13 @@ persimune_dict = {
     for table_name in PERSIMUNE_MAPPING
 }
 
+# we don't really know what's up with this
+# we need to group NPU codes
+
+# we need to check for slopes if we can also get an intercept
+# and not just the coefficient
+# check with some dummy examples and make predictions before hand
+
 persimune_dict["PERSIMUNE_leukocytes"] = download_and_rename_data(
     "PERSIMUNE_biochemistry",
     {
@@ -39,14 +40,14 @@ persimune_dict["PERSIMUNE_leukocytes"] = download_and_rename_data(
             "patientid": "patientid",
             "samplingdatetime": "timestamp",
             "analysiscode": "variable_code",
-            "c_resultvaluenumeric": "value",
+            "c_associatedleukocytevalue": "value",
         }
     },
     cohort=lyfo_cohort_strings,
 )
 persimune_dict["PERSIMUNE_leukocytes"]["data_source"] = "PERSIMUNE_leukocytes"
 # overall leukocytes
-# persimune_dict["PERSIMUNE_leukocytes"]["variable_code"] = "all"
+persimune_dict["PERSIMUNE_leukocytes"]["variable_code"] = "all"
 
 for dataset in persimune_dict:
     persimune_dict[dataset]["patientid"] = persimune_dict[dataset]["patientid"].astype(
