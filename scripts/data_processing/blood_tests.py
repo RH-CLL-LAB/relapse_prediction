@@ -157,3 +157,7 @@ blood_tests["value_numeric"] = pd.to_numeric(blood_tests["value"], errors="coerc
 blood_tests.loc[blood_tests["value_numeric"].isna(), "value"] = 1
 blood_tests["value"] = pd.to_numeric(blood_tests["value"], errors="coerce")
 blood_tests = blood_tests[[x for x in blood_tests.columns if x != "value_numeric"]]
+
+blood_tests_all = blood_tests.copy()
+blood_tests_all.loc[:, "variable_code"] = "all"
+blood_tests_all.loc[:, "data_source"] = "blood_tests_all"

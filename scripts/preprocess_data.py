@@ -11,10 +11,14 @@ from data_processing.wide_data import *
 from data_processing.sks_opr import *
 from data_processing.picture_diagnostics import *
 from data_processing.lab_values import *
-from data_processing.laboratory_measurements import lab_measurements_data
-from data_processing.pathology_genetics import pathology_genes
+from data_processing.laboratory_measurements import (
+    lab_measurements_data,
+    lab_measurements_data_all,
+)
+from data_processing.pathology_specifics import pathology_genes, concatenated_pathology
 
 # performance status and IPIs for the patients
+
 
 from datetime import timedelta
 
@@ -58,21 +62,6 @@ IPIs_ffill = IPIs_ffill.merge(IPIs_concat, how="left")
 
 WIDE_DATA = WIDE_DATA.merge(IPIs_ffill, how="left")
 
-# for now we just paste the medicine stuff on
-# to the RKKP data
-
-WIDE_DATA = WIDE_DATA.merge(medicine_days_from_treatment_pivot, how="left")
-
-WIDE_DATA = WIDE_DATA.fillna(-1)
-
-# NOTE: There could be something
-# here where we could also take "c_oprart",
-# which is a higher up category for categorizing
-# the operations
-
-# check if there are any concatenating needed
-# just do counts mostly
-
 TABLE_TO_LONG_FORMAT_MAPPING = {
     "SDS_pato": {
         "d_rekvdato": "timestamp",
@@ -84,8 +73,6 @@ TABLE_TO_LONG_FORMAT_MAPPING = {
         "date_diagnosis": "timestamp",
         "diagnosis": "variable_code",
     },
-    # NOTE: some of these variables are
-    # categorical (bevidsthedsniveau)
     "SP_VitaleVaerdier": {
         "patientid": "patientid",
         "recorded_time": "timestamp",
@@ -113,23 +100,24 @@ data_dict = {
     for table_name in tqdm(TABLE_TO_LONG_FORMAT_MAPPING)
 }
 
-# there are duplicates in diagnosis_all in
 
 data_dict["sks_at_the_hospital"] = sks_at_the_hospital
 data_dict["sks_referals"] = sks_referals
+data_dict["sks_at_the_hospital_unique"] = sks_at_the_hospital_unique
+data_dict["sks_referals_unique"] = sks_referals_unique
 
 for dataset in persimune_dict:
     data_dict[dataset] = persimune_dict[dataset]
 
-for dataset in medicine_data:
-    data_dict[dataset] = medicine_data[dataset]
+for dataset in medicine_dict:
+    data_dict[dataset] = medicine_dict[dataset]
 
 for dataset in lab_data:
     data_dict[dataset] = lab_data[dataset]
-# social history
 
+# delete for memory
 del persimune_dict
-del medicine_data
+del medicine_dict
 
 data_dict["diagnoses_all"] = (
     data_dict["diagnoses_all"]
@@ -148,7 +136,6 @@ diagnosis_all_filtered = diagnosis_all_filtered[
     < diagnosis_all_filtered["date_treatment_1st_line"]
 ].reset_index(drop=True)[["patientid", "timestamp", "variable_code", "data_source"]]
 
-# do the same for medications
 
 diagnosis_all_comorbidity = (
     diagnosis_all_filtered.groupby(["patientid", "variable_code"])
@@ -163,9 +150,6 @@ diagnosis_all_comorbidity["data_source"] = "diagnoses_all_comorbidity"
 
 data_dict["diagnoses_all_comorbidity"] = diagnosis_all_comorbidity
 
-data_dict["poly_pharmacy"] = poly_pharmacy
-
-
 data_dict["SDS_pato"] = (
     data_dict["SDS_pato"]
     .merge(SNOMED_LOOKUP_TABLE, left_on="variable_code", right_on="SKSkode")[
@@ -176,21 +160,19 @@ data_dict["SDS_pato"] = (
 )
 
 data_dict["labmeasurements"] = lab_measurements_data
+data_dict["lab_measurements_data_all"] = lab_measurements_data_all
 data_dict["SP_SocialHX"] = social_history_data
 data_dict["SP_Bloddyrkning_Del1"] = blood_tests
+data_dict["blood_tests_all"] = blood_tests_all
 data_dict["gene_alterations"] = pathology_genes
+data_dict["pathology_concat"] = concatenated_pathology
+
 
 LYFO_AKI["timestamp"] = pd.to_datetime(LYFO_AKI["timestamp"])
 
 data_dict["LYFO_AKI"] = LYFO_AKI
 data_dict["SP_BilleddiagnostiskeUndersøgelser_Del1"] = picture_diagnostics
 
-# drop duplicates for each individual data source
-
-data_dict = {
-    data_str: data.drop_duplicates().reset_index(drop=True)
-    for data_str, data in data_dict.items()
-}
 
 LONG_DATA = pd.concat(data_dict).reset_index(drop=True)
 
@@ -198,29 +180,11 @@ LONG_DATA = LONG_DATA[LONG_DATA["timestamp"] != "NULL"].reset_index(drop=True)
 
 LONG_DATA["timestamp"] = pd.to_datetime(LONG_DATA["timestamp"])
 
-# stupid fix for getting variables to work with value for pato and diagnoses
-
 LONG_DATA.loc[
     LONG_DATA["data_source"].isin(["SDS_pato", "diagnoses_all", "PERSIMUNE_radiology"]),
     "value",
 ] = 1  # doesn't matter what value this is
 
-translation_dict = {"Negative": 0, "Positive": 1}
-
-LONG_DATA.loc[
-    LONG_DATA["data_source"].isin(
-        ["PERSIMUNE_microbiology_analysis", "PERSIMUNE_microbiology_culture"]
-    ),
-    "value",
-] = LONG_DATA[
-    LONG_DATA["data_source"].isin(
-        ["PERSIMUNE_microbiology_analysis", "PERSIMUNE_microbiology_culture"]
-    )
-][
-    "value"
-].apply(
-    lambda x: translation_dict.get(x, -1)
-)
 
 LONG_DATA.loc[LONG_DATA["data_source"] == "LYFO_AKI", "variable_code"] = "n_aki"
 
@@ -237,9 +201,13 @@ for column in WIDE_DATA.columns:
 LONG_DATA = LONG_DATA.merge(WIDE_DATA[["patientid", "date_treatment_1st_line"]])
 
 
-# filtering so we only have data from before treatment
+# filtering so we only have data from before treatment AND after 3 year before treatment
 LONG_DATA = LONG_DATA[
-    LONG_DATA["timestamp"] <= LONG_DATA["date_treatment_1st_line"]
+    (LONG_DATA["timestamp"] <= LONG_DATA["date_treatment_1st_line"])
+    & (
+        LONG_DATA["timestamp"]
+        >= LONG_DATA["date_treatment_1st_line"] - datetime.timedelta(days=365 * 3)
+    )
 ].reset_index(drop=True)
 
 

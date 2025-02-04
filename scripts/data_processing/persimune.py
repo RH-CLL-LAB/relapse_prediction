@@ -25,13 +25,108 @@ persimune_dict = {
     )
     for table_name in PERSIMUNE_MAPPING
 }
+# convert categorical results
 
-# we don't really know what's up with this
-# we need to group NPU codes
+value_convertion_dict = {
+    "Negative": 0,
+    "NULL": 0,
+    "Positive": 1,
+    "Possible Cont.": 1,
+    "Not analyzed": 0,
+}
+
+persimune_dict["PERSIMUNE_microbiology_culture"]["value"] = persimune_dict[
+    "PERSIMUNE_microbiology_culture"
+]["value"].apply(lambda x: value_convertion_dict.get(x, 0))
+
+persimune_dict["PERSIMUNE_microbiology_analysis"].loc[
+    persimune_dict["PERSIMUNE_microbiology_analysis"]["value"].isna(), "value"
+] = "Missing"
+
+positive_values = ["Positive", "High"]
+
+persimune_dict["PERSIMUNE_microbiology_analysis"]["value"] = persimune_dict[
+    "PERSIMUNE_microbiology_analysis"
+]["value"].apply(
+    lambda x: 1 if any(positive_word in x for positive_word in positive_values) else 0
+)
+
+# convert categorical results to 1s and zeroes
+
+overview = (
+    persimune_dict["PERSIMUNE_microbiology_analysis"]["variable_code"]
+    .value_counts()
+    .reset_index()
+)
+
+# group 500 variables
+
+persimune_dict["PERSIMUNE_microbiology_analysis"] = persimune_dict[
+    "PERSIMUNE_microbiology_analysis"
+][
+    persimune_dict["PERSIMUNE_microbiology_analysis"]["variable_code"] != "NULL"
+].reset_index(
+    drop=True
+)
+persimune_dict["PERSIMUNE_microbiology_analysis"] = persimune_dict[
+    "PERSIMUNE_microbiology_analysis"
+][
+    persimune_dict["PERSIMUNE_microbiology_analysis"]["variable_code"] != "_"
+].reset_index(
+    drop=True
+)
+persimune_dict["PERSIMUNE_microbiology_analysis"] = persimune_dict[
+    "PERSIMUNE_microbiology_analysis"
+][
+    persimune_dict["PERSIMUNE_microbiology_analysis"]["variable_code"].notna()
+].reset_index(
+    drop=True
+)
+
+variable_dict = {
+    "covid": ["SARS-CoV-2", "Coronavirus", "Corona", "coronavirus", "SARS-Cov"],
+    "herpes": ["Herpes"],
+    "cmv": ["CMV"],
+    "influenza": ["Influenza", "Inf."],
+    "parainfluenza": ["Parainfluenza"],
+    "epstein": ["Epstein", "EBV", "EBNA IgG"],
+    "cytomegalovirus": ["Cytomegalovirus"],
+    "chlamydophila": ["Chlamydophila", "Chlamy."],
+    "chlamydia": ["Chlamydia"],
+    "adenovirus": ["Adeno"],
+    "rotavirus": ["Rota"],
+    "bocavirus": ["Boca"],
+    "sapovirus": ["Sapo"],
+    "noro": ["Norovirus"],
+    "astro": ["Astro"],
+    "entero": ["Entero"],
+    "rhino": ["Rhino"],
+    "toxoplasma": ["Toxoplasma", "Toxoplasmose", "Toxo"],
+    # "toxoplasmose": ["Toxoplasmose"],
+    "bartonella": ["Bartonella"],
+    "hepatitis": ["Hepatitis"],
+    "pneumokok": ["Pneumokok"],
+    # "ebv": ["EBV"],
+    "legionella": ["Legionella"],
+    "aspergillus": ["Aspergillus"],
+    "varicella": ["Varicella"],
+}
+
+# there are probably more groupings but for now lets stick to these
+
+for group, search_terms in variable_dict.items():
+    persimune_dict["PERSIMUNE_microbiology_analysis"]["variable_code"] = persimune_dict[
+        "PERSIMUNE_microbiology_analysis"
+    ]["variable_code"].apply(
+        lambda x: group if any(search_term in x for search_term in search_terms) else x
+    )
+
 
 # we need to check for slopes if we can also get an intercept
 # and not just the coefficient
 # check with some dummy examples and make predictions before hand
+
+# there might be more crazy variables (in biochemistry) - can you do the same trick?
 
 persimune_dict["PERSIMUNE_leukocytes"] = download_and_rename_data(
     "PERSIMUNE_biochemistry",
@@ -45,9 +140,11 @@ persimune_dict["PERSIMUNE_leukocytes"] = download_and_rename_data(
     },
     cohort=lyfo_cohort_strings,
 )
+
 persimune_dict["PERSIMUNE_leukocytes"]["data_source"] = "PERSIMUNE_leukocytes"
 # overall leukocytes
 persimune_dict["PERSIMUNE_leukocytes"]["variable_code"] = "all"
+
 
 for dataset in persimune_dict:
     persimune_dict[dataset]["patientid"] = persimune_dict[dataset]["patientid"].astype(

@@ -7,8 +7,7 @@ rkkp_df = pd.read_csv("/ngc/projects2/dalyca_r/clean_r/RKKP_LYFO_CLEAN.csv")
 
 # check in with Carsten or Peter Brown
 
-included_treatments = ["chop", "choep", "cop", "maxichop", "minichop"]
-
+included_treatments = ["chop", "choep", "maxichop"]  # "cop", "minichop"
 
 dlbcl_rkkp_df = rkkp_df[rkkp_df["date_treatment_1st_line"].notna()].reset_index(
     drop=True
@@ -50,7 +49,7 @@ lyfo_extra = pd.read_csv(
 
 
 # merge extra information
-WIDE_DATA = dlbcl_rkkp_df.merge(lyfo_extra).reset_index(drop=True)
+WIDE_DATA = dlbcl_rkkp_df.merge(lyfo_extra, how="left").reset_index(drop=True)
 
 WIDE_DATA["relaps_pato_dt"] = pd.to_datetime(WIDE_DATA["relaps_pato_dt"])
 WIDE_DATA["relaps_lpr_dt"] = pd.to_datetime(WIDE_DATA["relaps_pato_dt"])
@@ -59,23 +58,22 @@ WIDE_DATA["date_diagnosis"] = pd.to_datetime(WIDE_DATA["date_diagnosis"])
 WIDE_DATA["date_death"] = pd.to_datetime(WIDE_DATA["date_death"])
 
 
-last_death = WIDE_DATA["date_death"].max()
-last_treatment = last_death - timedelta(days=730)
-# keep everyone instead, and just annotate who is probably not
-# with full followup
-# people can relapse within 2 years where we actually
-# have a full followup
+# last_death = WIDE_DATA["date_death"].max()
+# last_treatment = last_death - timedelta(days=730)
+# # keep everyone instead, and just annotate who is probably not
+# # with full followup
+# # people can relapse within 2 years where we actually
+# # have a full followup
+
+# WIDE_DATA = WIDE_DATA[
+#     WIDE_DATA["date_treatment_1st_line"] < last_treatment
+# ].reset_index(drop=True)
+
+# all patients up until 2022 have a full 2 year followup
 
 WIDE_DATA = WIDE_DATA[
-    WIDE_DATA["date_treatment_1st_line"] < last_treatment
+    WIDE_DATA["date_treatment_1st_line"] < pd.to_datetime("2022-01-01")
 ].reset_index(drop=True)
-
-# relapse is unruly before
-
-WIDE_DATA = WIDE_DATA[
-    WIDE_DATA["date_treatment_1st_line"] < pd.to_datetime("2020-01-01")
-].reset_index(drop=True)
-WIDE_DATA
 
 # relapse label - is this true?
 # PETER BROWN LABELS
@@ -128,9 +126,10 @@ WIDE_DATA = WIDE_DATA[
 ]
 
 
-# WIDE_DATA.loc[WIDE_DATA["relapse_label"] != 0, "relapse_label"] = 1
-
 WIDE_DATA = WIDE_DATA.fillna(pd.NA)
+
+WIDE_DATA.loc[:, "year_treat"] = WIDE_DATA["date_treatment_1st_line"].dt.year
+
 
 lyfo_cohort = get_cohort_string_from_data(WIDE_DATA)
 lyfo_cohort_strings = lyfo_cohort
@@ -144,12 +143,8 @@ death = load_data_from_table("SDS_t_dodsaarsag_2", cohort=lyfo_cohort)
 WIDE_DATA = WIDE_DATA.merge(death[["c_dodsmaade", "patientid"]], how="left")
 
 WIDE_DATA.loc[WIDE_DATA["c_dodsmaade"] < 3, "dead_label"] = pd.NA
-# probably also should change the date to NA so that we don't get into weird timeseriesflattener problems
 
 WIDE_DATA = WIDE_DATA[[x for x in WIDE_DATA.columns if x != "c_dodsmaade"]]
-
-
-WIDE_DATA.loc[:, "year_treat"] = WIDE_DATA["date_treatment_1st_line"].dt.year
 
 # hmm strange - there's 680 patients that have no age or sex in RKKP
 
@@ -188,7 +183,6 @@ WIDE_DATA.loc[WIDE_DATA["age_diagnosis"].isna(), "age_diagnosis"] = round(
     / 365.5
 )
 
-# could be that this should be days from diagnosis to treatment
 
 WIDE_DATA["days_from_diagnosis_to_tx"] = (
     WIDE_DATA["date_treatment_1st_line"] - WIDE_DATA["date_diagnosis"]
@@ -201,11 +195,22 @@ WIDE_DATA["age_at_tx"] = round(
 WIDE_DATA = WIDE_DATA[
     [x for x in WIDE_DATA.columns if x not in ["sex_from_patient_table", "date_birth"]]
 ]
+import math
 
 
 def calculate_NCCN_IPI(age, ldh, aa_stage, extranodal, ps):
-    # NOTE THAT THIS WILL STILL RUN IF VALUES ARE MISSING
-    # WHICH COULD CREATE FALSE IPIS
+    # NOTE NOW RETURNING NANS FOR PATIENTS WITH MISSING VALUES
+
+    if any(
+        [
+            math.isnan(age),
+            math.isnan(ldh),
+            math.isnan(aa_stage),
+            # math.isnan(extranodal),
+            math.isnan(ps),
+        ]
+    ):
+        return pd.NA
     total_score = 0
     if age > 75:
         total_score += 3
@@ -243,6 +248,23 @@ WIDE_DATA["NCCN_IPI_diagnosis"] = WIDE_DATA.apply(
         x["AA_stage_diagnosis"],
         x["extranodal_disease_diagnosis"],
         x["PS_diagnosis"],
+    ),
+    axis=1,
+)
+
+
+def calculate_nodality_of_disease(extranodal, nodal):
+    if extranodal == 1 and nodal == 1:
+        return 2
+    elif nodal == 1:
+        return 1
+    else:
+        return -1
+
+
+WIDE_DATA["nodality_disease_diagnosis"] = WIDE_DATA.apply(
+    lambda x: calculate_nodality_of_disease(
+        x["extranodal_disease_diagnosis"], x["nodal_disease_diagnosis"]
     ),
     axis=1,
 )

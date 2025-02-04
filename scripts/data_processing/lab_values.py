@@ -24,10 +24,6 @@ lab_dict = {
     },
 }
 
-# Check if SDS_epikur normalizing is proper
-
-# NOTE: Need to fix dates before concatenating!
-
 lab_data = {
     table_name: download_and_rename_data(
         table_name=table_name, config_dict=lab_dict, cohort=lyfo_cohort
