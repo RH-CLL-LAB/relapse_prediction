@@ -35,7 +35,13 @@ train = feature_matrix[~feature_matrix["patientid"].isin(test_patientids)].reset
     drop=True
 )
 
-train = train[train["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
+pd.Categorical(wide_data["subtype"]).categories
+
+subtype_number = 3
+
+# train = train[train["pred_RKKP_subtype_fallback_-1"] == subtype_number].reset_index(
+#     drop=True
+# )
 
 outcome_column = [x for x in feature_matrix if "outc" in x]
 outcome = outcome_column[-1]
@@ -100,21 +106,23 @@ X_train_smtom, y_train_smtom = (
     train[outcome],
 )
 
-test_specific = test[test["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
-
-included_treatments = ["chop", "choep", "maxichop"]  # "cop", "minichop"
-
-WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
-
-test_specific = test_specific.merge(
-    WIDE_DATA[["patientid", "regime_1_chemo_type_1st_line"]]
-)
-
-test_specific = test_specific[
-    test_specific["regime_1_chemo_type_1st_line"].isin(included_treatments)
+test_specific = test[
+    test["pred_RKKP_subtype_fallback_-1"] == subtype_number
 ].reset_index(drop=True)
 
-test_specific = test_specific.drop(columns="regime_1_chemo_type_1st_line")
+# included_treatments = ["chop", "choep", "maxichop"]  # "cop", "minichop"
+
+# WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
+
+# test_specific = test_specific.merge(
+#     WIDE_DATA[["patientid", "regime_1_chemo_type_1st_line"]]
+# )
+
+# test_specific = test_specific[
+#     ~test_specific["regime_1_chemo_type_1st_line"].isin(included_treatments)
+# ].reset_index(drop=True)
+
+# test_specific = test_specific.drop(columns="regime_1_chemo_type_1st_line")
 
 X_test_specific = test_specific[[x for x in test_specific.columns if x in features]]
 y_test_specific = test_specific[outcome]
@@ -357,9 +365,9 @@ y_pred = [
 
 
 y_pred = bst.predict_proba(X_test_specific).astype(float)
-y_pred = [1 if x[1] > 0.3 else 0 for x in y_pred]
+y_pred = [1 if x[1] > 0.2 else 0 for x in y_pred]
 
-y_test_specific = test_specific[outcomes[3]]
+y_test_specific = test_specific[outcomes[-1]]
 
 f1 = f1_score(y_test_specific.values, y_pred)
 roc_auc = roc_auc_score(
@@ -421,7 +429,7 @@ feature_names = [
     "Count of treatments with blood or blood products (1095 days)",
     "Count of treatments with relation to blood, hematopoietic organs lymphatic tissue (90 days)",
     "Sex",
-    "Platelets (diagnosis)",
+    "TRC (diagnosis)",
     "Count of prednisolone prescriptions (1095 dage)",
     "Count of days of hospitalization due to minor surgical procedures (365 days)",
     "Maximum of beta-2-microglubolin (1095 days)",
@@ -492,8 +500,8 @@ figure = shap.summary_plot(
 )
 
 
-#plt.savefig("plots/shap_values_dlbcl_only.png", dpi=300, bbox_inches="tight")
-#plt.savefig("plots/shap_values_dlbcl_only.pdf", bbox_inches="tight")
+# plt.savefig("plots/shap_values_dlbcl_only.png", dpi=300, bbox_inches="tight")
+# plt.savefig("plots/shap_values_dlbcl_only.pdf", bbox_inches="tight")
 
 plt.savefig("plots/shap_values.png", dpi=300, bbox_inches="tight")
 plt.savefig("plots/shap_values.pdf", bbox_inches="tight")

@@ -212,7 +212,10 @@ def get_cohort_string_from_data(data: pd.DataFrame, id_col="patientid") -> str:
     """
     return f"({', '.join(data[id_col].astype(str).values)})"
 
-def get_cohort_string_from_data_as_strings(data: pd.DataFrame, id_col="patientid") -> str:
+
+def get_cohort_string_from_data_as_strings(
+    data: pd.DataFrame, id_col="patientid"
+) -> str:
     """Helper function for creating string to limit loading to only include cohort
 
     Args:

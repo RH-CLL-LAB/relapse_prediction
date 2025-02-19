@@ -322,7 +322,7 @@ def get_table_from_data(filtered):
     # LDH
 
     ldh_uln = len(
-        filtered[(filtered["LDH_diagnosis"] < 205) & (filtered["age_diagnosis"] < 70)]
+        filtered[(filtered["LDH_diagnosis"] <= 205) & (filtered["age_diagnosis"] < 70)]
     )
 
     ldh_under_three_uln = len(
@@ -340,7 +340,7 @@ def get_table_from_data(filtered):
     )
 
     ldh_uln += len(
-        filtered[(filtered["LDH_diagnosis"] < 255) & (filtered["age_diagnosis"] >= 70)]
+        filtered[(filtered["LDH_diagnosis"] <= 255) & (filtered["age_diagnosis"] >= 70)]
     )
 
     ldh_under_three_uln += len(
@@ -404,15 +404,24 @@ def get_table_from_data(filtered):
 
 test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
 
+WIDE_DATA
+
 filtered = WIDE_DATA[
-    (WIDE_DATA["subtype"] == "DLBCL")
+    ~(WIDE_DATA["subtype"] == "DLBCL")
     & (WIDE_DATA["regime_1_chemo_type_1st_line"].isin(included_treatments))
     & (WIDE_DATA["patientid"].isin(test_patientids))
 ]
-filtered
+
+
+filtered["age_diagnosis"].isna().sum()
 
 filtered = WIDE_DATA[
     (WIDE_DATA["subtype"] != "DLBCL") & (WIDE_DATA["patientid"].isin(test_patientids))
+]
+
+
+filtered = WIDE_DATA[
+    (WIDE_DATA["subtype"] != "DLBCL") & (~WIDE_DATA["patientid"].isin(test_patientids))
 ]
 
 
@@ -427,6 +436,8 @@ filtered[filtered["regime_1_chemo_type_1st_line"].isin(included_treatments)]
 [x for x in WIDE_DATA.columns]
 
 not_percent, percent = get_table_from_data(filtered)
+
+# they are under 70
 
 not_percent
 not_percent["alc"]
