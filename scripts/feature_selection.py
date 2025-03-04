@@ -7,7 +7,8 @@ from sklearn.model_selection import GridSearchCV, KFold, StratifiedGroupKFold
 
 seed = 46
 test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
-feature_matrix = pd.read_pickle("results/feature_matrix_single_disease_all.pkl")
+feature_matrix = pd.read_pickle("results/feature_matrix_all.pkl")
+
 
 test = feature_matrix[feature_matrix["patientid"].isin(test_patientids)].reset_index(
     drop=True
@@ -40,5 +41,5 @@ features = [i for i, x in enumerate(lasso_coef) if x > 0.001]
 feature_column_names = train[predictor_columns].columns[features]
 
 pd.DataFrame(feature_column_names, columns=["features"]).to_csv(
-    "results/feature_names_single_disease_all.csv", index=False
+    "results/feature_names_all.csv", index=False
 )

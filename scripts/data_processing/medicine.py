@@ -1,64 +1,11 @@
 from helpers.sql_helper import *
-from helpers.preprocessing_helper import *
+from helpers.processing_helper import *
 from data_processing.wide_data import lyfo_cohort, WIDE_DATA
 from data_processing.lookup_tables import ATC_LOOKUP_TABLE
 from tqdm import tqdm
 import numpy as np
 
 tqdm.pandas()
-
-
-def normalize_units(data, variable_code, unit, factor):
-    data.loc[
-        (data["variable_code"] == variable_code) & (data["unit"] == unit),
-        "value_numeric",
-    ] = (
-        data.loc[(data["variable_code"] == variable_code) & (data["unit"] == unit)][
-            "value_numeric"
-        ]
-        * factor
-    )
-
-
-medicine_dict = {
-    "RECEPTDATA_CLEAN": {
-        "atc_kode": "variable_code",
-        "expdato": "timestamp",
-        "patientid": "patientid",
-        "styrke": "value",
-        "Unit": "unit",
-    },
-    "adm_medicine": {
-        "patientid": "patientid",
-        "d_adm_date": "timestamp",
-        "d_ord_slut_date": "end_date",
-        "c_atc": "variable_code",
-        "v_adm_dosis": "value",
-        "v_adm_dosis_enhed": "unit",
-    },
-    # consider adding number of days
-    "SP_OrdineretMedicin": {
-        "patientid": "patientid",
-        "order_start_time": "timestamp",
-        "order_end_time": "end_date",
-        "atc": "variable_code",
-        "hv_discrete_dose": "value",  # most likely wrong - doesn't match with strings
-    },
-    "SDS_epikur": {
-        "atc": "variable_code",
-        "eksd": "timestamp",
-        "doso": "value",  # went with packsize before, but now we're running with doso, converting nans to 1
-        "patientid": "patientid",
-    },
-    "SDS_indberetningmedpris": {
-        "c_atc": "variable_code",
-        "patientid": "patientid",
-        "d_adm": "timestamp",
-        "d_ord_slut": "end_date",
-        "v_styrke_num": "value",
-        "v_styrke_enhed": "unit",
-    },
-}
 
 adm_medicine_dict = {
     "adm_medicine": {
@@ -530,11 +477,7 @@ ord_medicine_concat["data_source"] = "ordered_medicine"
 adm_medicine_concat.drop_duplicates().reset_index(drop=True)
 ord_medicine_concat.drop_duplicates().reset_index(drop=True)
 
-# okaaay - so we need to
-# (1) merge with wide data
-# (2) get the treatment date
-# (3) filter by treatment date
-# (4) calculate first and last date of receiving that specific drug
+# now get days from first line treatment and until medicine was prescribed / administed
 
 WIDE_DATA_SUBSET = WIDE_DATA[["patientid", "date_treatment_1st_line"]]
 
@@ -614,70 +557,11 @@ def get_days_from_treatment(data):
         np.nan, -1
     )
 
-    WIDE_DATA_DISEASE = WIDE_DATA[["patientid", "subtype"]]
-
-    medicine_days_from_treatment = medicine_days_from_treatment.merge(WIDE_DATA_DISEASE)
-    medicine_days_from_treatment = medicine_days_from_treatment[
-        medicine_days_from_treatment["subtype"] == "DLBCL"
-    ].reset_index(drop=True)
-
-    # here we filter by 10% of patients having received it
-    n_patients_per_drug = (
-        medicine_days_from_treatment.groupby("variable_code")
-        .agg(counts=("patientid", "nunique"))
-        .reset_index()
-    )
-
-    drugs_above_threshold = n_patients_per_drug[
-        n_patients_per_drug["counts"]
-        > 0.10
-        * len(WIDE_DATA_SUBSET[~WIDE_DATA_SUBSET["patientid"].isin(test_patientids)])
-    ]["variable_code"].values
-
-    medicine_days_from_treatment_single_disease = medicine_days_from_treatment[
-        medicine_days_from_treatment["variable_code"].isin(drugs_above_threshold)
-    ].reset_index(drop=True)
-
-    medicine_days_from_treatment_single_disease = (
-        medicine_days_from_treatment_single_disease.melt(
-            value_vars=["max_days", "min_days", "days_between_max_and_min"],
-            id_vars=["patientid", "variable_code"],
-        )
-    )
-
-    medicine_days_from_treatment_pivot_single_disease = (
-        medicine_days_from_treatment_single_disease.pivot(
-            index="patientid", columns=["variable_code", "variable"], values="value"
-        ).reset_index()
-    )
-    medicine_days_from_treatment_pivot_single_disease.columns = [
-        "%s_%s" % (a, b)
-        for a, b in medicine_days_from_treatment_pivot_single_disease.columns
-    ]
-    medicine_days_from_treatment_pivot_single_disease = (
-        medicine_days_from_treatment_pivot_single_disease.rename(
-            columns={"patientid_": "patientid"}
-        )
-    )
-
-    medicine_days_from_treatment_pivot_single_disease = (
-        medicine_days_from_treatment_pivot_single_disease.replace(np.nan, -1)
-    )
-
-    return (
-        medicine_days_from_treatment_pivot,
-        medicine_days_from_treatment_pivot_single_disease,
-    )
+    return medicine_days_from_treatment_pivot
 
 
-(
-    adm_medicine_days_from_treatment_pivot,
-    adm_medicine_days_from_treatment_pivot_single_disease,
-) = get_days_from_treatment(adm_medicine_concat)
-(
-    ord_medicine_days_from_treatment_pivot,
-    ord_medicine_days_from_treatment_pivot_single_disease,
-) = get_days_from_treatment(ord_medicine_concat)
+adm_medicine_days_from_treatment_pivot = get_days_from_treatment(adm_medicine_concat)
+ord_medicine_days_from_treatment_pivot = get_days_from_treatment(ord_medicine_concat)
 
 adm_medicine_days_from_treatment_pivot = adm_medicine_days_from_treatment_pivot.rename(
     columns={
@@ -693,26 +577,6 @@ ord_medicine_days_from_treatment_pivot = ord_medicine_days_from_treatment_pivot.
         if x != "patientid"
     }
 ).reset_index(drop=True)
-
-
-adm_medicine_days_from_treatment_pivot_single_disease = (
-    adm_medicine_days_from_treatment_pivot_single_disease.rename(
-        columns={
-            x: f"administered_{x}"
-            for x in adm_medicine_days_from_treatment_pivot_single_disease.columns
-            if x != "patientid"
-        }
-    ).reset_index(drop=True)
-)
-ord_medicine_days_from_treatment_pivot_single_disease = (
-    ord_medicine_days_from_treatment_pivot_single_disease.rename(
-        columns={
-            x: f"ordered_{x}"
-            for x in ord_medicine_days_from_treatment_pivot_single_disease.columns
-            if x != "patientid"
-        }
-    ).reset_index(drop=True)
-)
 
 # all the relevant feature datasets listed here
 # static:

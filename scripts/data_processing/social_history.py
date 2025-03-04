@@ -1,10 +1,10 @@
 from helpers.sql_helper import *
-from helpers.preprocessing_helper import *
+from helpers.processing_helper import *
 from data_processing.wide_data import lyfo_cohort
 from datetime import timedelta
 
 social_history_dict = {
-    "SP_SocialHX": {
+    "SP_Social_Hx": {
         "patientid": "patientid",
         "registringsdato": "timestamp",
         "ryger": "smoking_cat",
@@ -14,7 +14,7 @@ social_history_dict = {
     }
 }
 social_history_data = download_and_rename_data(
-    "SP_SocialHX",
+    "SP_Social_Hx",
     social_history_dict,
     cohort=lyfo_cohort,
 )

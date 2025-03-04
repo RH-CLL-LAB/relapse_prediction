@@ -19,6 +19,30 @@ from xgboost import XGBClassifier
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+import xgboost
+
+
+from sklearn.calibration import calibration_curve, CalibrationDisplay
+
+from sklearn.metrics import brier_score_loss
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import (
+    RocCurveDisplay,
+    PrecisionRecallDisplay,
+    ConfusionMatrixDisplay,
+    DetCurveDisplay,
+)
+
+import matplotlib.patches as mpatches
+
+from helpers.constants import *
+from helpers.processing_helper import *
+
+# make all math text regular
+params = {"mathtext.default": "regular"}
+plt.rcParams.update(params)
+
+
 wide_data = pd.read_pickle("data/WIDE_DATA.pkl")
 
 sns.set_context("paper")
@@ -61,21 +85,6 @@ predictor_columns = [
     for x in predictor_columns
     if x not in ["pred_RKKP_subtype_fallback_-1", "pred_RKKP_hospital_fallback_-1"]
 ]
-
-
-def clip_values(train: pd.DataFrame, test: pd.DataFrame, column: str):
-    relevant_data = train[train[column] != -1][column]
-
-    lower_limit, upper_limit = relevant_data.quantile(0.01), relevant_data.quantile(
-        0.99
-    )
-    train.loc[train[column] != -1, column] = train[train[column] != -1][column].clip(
-        lower=lower_limit, upper=upper_limit
-    )
-    test.loc[test[column] != -1, column] = test[test[column] != -1][column].clip(
-        lower=lower_limit, upper=upper_limit
-    )
-
 
 for column in tqdm(features):
     # this should be the way clip values is done
@@ -125,21 +134,6 @@ bst = XGBClassifier(
 
 bst.fit(X_train_smtom, y_train_smtom)
 
-from sklearn.calibration import calibration_curve, CalibrationDisplay
-
-from sklearn.metrics import brier_score_loss
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import (
-    RocCurveDisplay,
-    PrecisionRecallDisplay,
-    ConfusionMatrixDisplay,
-    DetCurveDisplay,
-)
-
-# make all math text regular
-params = {"mathtext.default": "regular"}
-plt.rcParams.update(params)
-
 
 disp = CalibrationDisplay.from_estimator(
     bst, X_test, y_test, n_bins=10, name="ML$_{\: All}$"
@@ -157,52 +151,6 @@ plt.savefig("plots/all_variables_calibration.pdf")
 
 brier_score_loss(y_test_specific, bst.predict_proba(X_test_specific)[:, 1])
 brier_score_loss(y_test, bst.predict_proba(X_test)[:, 1])
-
-
-def check_performance(X, y, threshold=0.5):
-    y_pred = bst.predict_proba(X).astype(float)
-    y_pred = [1 if x[1] > threshold else 0 for x in y_pred]
-
-    f1 = f1_score(y.values, y_pred)
-    roc_auc = roc_auc_score(y.values, bst.predict_proba(X).astype(float)[:, 1])
-    recall = recall_score(y.values, y_pred)
-    specificity = recall_score(y.values, y_pred, pos_label=0)
-    precision = precision_score(y.values, y_pred, zero_division=1)
-    pr_auc = average_precision_score(y.values, bst.predict_proba(X).astype(float)[:, 1])
-    mcc = matthews_corrcoef(y.values, y_pred)
-    return f1, roc_auc, recall, specificity, precision, pr_auc, mcc
-
-
-def check_performance_across_thresholds(X, y):
-    list_of_results = []
-    for threshold in np.linspace(0, 1, num=100):
-        f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-            X, y, threshold=threshold
-        )
-        list_of_results.append(
-            {
-                "threshold": threshold,
-                "f1": f1,
-                "roc_auc": roc_auc,
-                "recall": recall,
-                "specificity": specificity,
-                "precision": precision,
-                "pr_auc": pr_auc,
-                "mcc": mcc,
-            }
-        )
-
-    results = pd.DataFrame(list_of_results)
-
-    best_threshold = results[results["mcc"] == results["mcc"].max()][
-        "threshold"
-    ].values[-1]
-
-    results = results.melt(id_vars="threshold")
-    sns.lineplot(data=results, x="threshold", y="value", hue="variable")
-    plt.show()
-    return results, best_threshold
-
 
 results, best_threshold = check_performance_across_thresholds(X_test, y_test)
 
@@ -263,45 +211,6 @@ test_specific["outc_succesful_treatment_label_within_0_to_1825_days_max_fallback
 ).apply(lambda x: min(x, 1))
 
 
-def calculate_CNS_IPI(age, ldh, aa_stage, extranodal, ps, kidneys_diagnosis):
-    # NOTE NOW RETURNING NANS FOR PATIENTS WITH MISSING VALUES
-    import math
-
-    if any(
-        [
-            math.isnan(age),
-            math.isnan(ldh),
-            math.isnan(aa_stage),
-            # math.isnan(extranodal),
-            math.isnan(ps),
-            math.isnan(kidneys_diagnosis),
-        ]
-    ):
-        return pd.NA
-    total_score = 0
-    if age > 60:
-        total_score += 1
-    if age < 70:
-        upper_limit = 205
-    else:
-        upper_limit = 255
-
-    if ldh > upper_limit:
-        total_score += 1
-
-    if ps > 1:
-        total_score += 1
-
-    if aa_stage > 2:
-        total_score += 1
-    if extranodal == 1:
-        total_score += 1
-    if kidneys_diagnosis:
-        total_score += 1
-
-    return total_score
-
-
 WIDE_DATA["CNS_IPI_diagnosis"] = WIDE_DATA.apply(
     lambda x: calculate_CNS_IPI(
         x["age_diagnosis"],
@@ -352,8 +261,6 @@ def make_prediction_categorical(y_prob):
         return "High"
 
 
-import matplotlib.patches as mpatches
-
 test_specific["NCCN_categorical"] = pd.Categorical(
     test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"].apply(
         make_NCCN_categorical
@@ -372,18 +279,6 @@ test_specific["ML_risk_group"] = pd.Categorical(
     ordered=True,
     categories=["Low", "Low-Intermediate", "Intermediate-High", "High"],
 )
-
-
-colors = [
-    "#D8AE9C",
-    "#EE8D73",
-    "#DC4649",
-    "#CA0020",
-    "#AEBBC3",
-    "#7DB9D7",
-    "#4195C3",
-    "#0571B0",
-]
 
 low_patch = mpatches.Patch(color=colors[0], label="Low", alpha=0.4)
 intermediate_low_patch = mpatches.Patch(
@@ -441,7 +336,6 @@ plt.xlabel("Estimated probability of treatment failure by the ML$_{\:All}$ model
 plt.ylabel("NCCN IPI Risk Groups")
 
 ax2 = figure_axis.twiny()
-# ax2.cla()
 ax2.set_xlim(-0.05, 1.05)
 ax2.set_xlabel("ML$_{\:All}$ Risk Groups")
 ax2.set_xticks([0.05, 0.2, 0.475, 0.825])
@@ -538,8 +432,6 @@ precision_dlbcl, recall_dlbcl, _ = precision_recall_curve(
 fpr_dlbcl, tpr_dlbcl, _ = roc_curve(y_test_specific.values, [x[1] for x in y_pred])
 
 roc_auc_score_dlbcl = roc_auc_score(y_test_specific.values, [x[1] for x in y_pred])
-
-import xgboost
 
 bst = xgboost.XGBClassifier()
 

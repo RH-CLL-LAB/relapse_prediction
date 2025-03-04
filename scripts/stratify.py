@@ -12,6 +12,19 @@ from sklearn.metrics import (
     confusion_matrix,
     classification_report,
 )
+
+from sklearn.calibration import calibration_curve, CalibrationDisplay
+from sklearn.metrics import brier_score_loss, log_loss
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import (
+    RocCurveDisplay,
+    PrecisionRecallDisplay,
+    ConfusionMatrixDisplay,
+    DetCurveDisplay,
+)
+import shap
+
+
 from tqdm import tqdm
 from imblearn.combine import SMOTETomek
 from xgboost import XGBClassifier
@@ -19,11 +32,18 @@ from xgboost import XGBClassifier
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-wide_data = pd.read_pickle("data/WIDE_DATA.pkl")
+from helpers.constants import *
+from helpers.processing_helper import *
 
 sns.set_context("paper")
 
 seed = 46
+
+DLBCL_ONLY = False
+
+
+WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
+
 test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
 feature_matrix = pd.read_pickle("results/feature_matrix_all.pkl")
 
@@ -35,7 +55,8 @@ train = feature_matrix[~feature_matrix["patientid"].isin(test_patientids)].reset
     drop=True
 )
 
-train = train[train["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
+if DLBCL_ONLY:
+    train = train[train["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
 
 outcome_column = [x for x in feature_matrix if "outc" in x]
 outcome = outcome_column[-1]
@@ -51,30 +72,6 @@ predictor_columns = [
     x
     for x in predictor_columns
     if x not in ["pred_RKKP_subtype_fallback_-1", "pred_RKKP_hospital_fallback_-1"]
-]
-
-
-def clip_values(train: pd.DataFrame, test: pd.DataFrame, column: str):
-    relevant_data = train[train[column] != -1][column]
-
-    lower_limit, upper_limit = relevant_data.quantile(0.01), relevant_data.quantile(
-        0.99
-    )
-    train.loc[train[column] != -1, column] = train[train[column] != -1][column].clip(
-        lower=lower_limit, upper=upper_limit
-    )
-    test.loc[test[column] != -1, column] = test[test[column] != -1][column].clip(
-        lower=lower_limit, upper=upper_limit
-    )
-
-
-supplemental_columns = [
-    "pred_RKKP_tumor_diameter_diagnosis_fallback_-1",
-    "pred_RKKP_LDH_diagnosis_fallback_-1",
-    "pred_RKKP_ALB_diagnosis_fallback_-1",
-    "pred_RKKP_TRC_diagnosis_fallback_-1",
-    "pred_RKKP_AA_stage_diagnosis_fallback_-1",
-    "pred_RKKP_extranodal_disease_diagnosis_fallback_-1",
 ]
 
 features = list(features)
@@ -95,32 +92,21 @@ supplemental_columns = [
 features = list(features)
 features.extend(supplemental_columns)
 
-X_train_smtom, y_train_smtom = (
-    train[[x for x in train.columns if x in features]],
-    train[outcome],
+(
+    X_train_smtom,
+    y_train_smtom,
+    X_test,
+    y_test,
+    X_test_specific,
+    y_test_specific,
+    test_specific,
+) = get_features_and_outcomes(
+    train,
+    test,
+    WIDE_DATA,
+    outcome,
+    col_to_leave,
 )
-
-test_specific = test[test["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
-
-included_treatments = ["chop", "choep", "maxichop"]  # "cop", "minichop"
-
-WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
-
-test_specific = test_specific.merge(
-    WIDE_DATA[["patientid", "regime_1_chemo_type_1st_line"]]
-)
-
-test_specific = test_specific[
-    test_specific["regime_1_chemo_type_1st_line"].isin(included_treatments)
-].reset_index(drop=True)
-
-test_specific = test_specific.drop(columns="regime_1_chemo_type_1st_line")
-
-X_test_specific = test_specific[[x for x in test_specific.columns if x in features]]
-y_test_specific = test_specific[outcome]
-
-X_test = test[[x for x in test.columns if x in features]]
-y_test = test[outcome]
 
 bst = XGBClassifier(
     missing=-1,
@@ -140,7 +126,7 @@ bst = XGBClassifier(
 
 NCCN_IPIS = [
     "pred_RKKP_age_diagnosis_fallback_-1",
-    "pred_RKKP_LDH_diagnosis_fallback_-1",  # needs to be normalized
+    "pred_RKKP_LDH_diagnosis_fallback_-1",
     "pred_RKKP_AA_stage_diagnosis_fallback_-1",
     "pred_RKKP_extranodal_disease_diagnosis_fallback_-1",
     "pred_RKKP_PS_diagnosis_fallback_-1",
@@ -148,66 +134,11 @@ NCCN_IPIS = [
 
 bst.fit(X_train_smtom, y_train_smtom)
 
-from sklearn.calibration import calibration_curve, CalibrationDisplay
-from sklearn.metrics import brier_score_loss, log_loss
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import (
-    RocCurveDisplay,
-    PrecisionRecallDisplay,
-    ConfusionMatrixDisplay,
-    DetCurveDisplay,
-)
 
-
-def check_performance(X, y, threshold=0.5):
-    y_pred = bst.predict_proba(X).astype(float)
-    y_pred = [1 if x[1] > threshold else 0 for x in y_pred]
-
-    f1 = f1_score(y.values, y_pred)
-    roc_auc = roc_auc_score(y.values, bst.predict_proba(X).astype(float)[:, 1])
-    recall = recall_score(y.values, y_pred)
-    specificity = recall_score(y.values, y_pred, pos_label=0)
-    precision = precision_score(y.values, y_pred, zero_division=1)
-    pr_auc = average_precision_score(y.values, bst.predict_proba(X).astype(float)[:, 1])
-    mcc = matthews_corrcoef(y.values, y_pred)
-    return f1, roc_auc, recall, specificity, precision, pr_auc, mcc
-
-
-def check_performance_across_thresholds(X, y):
-    list_of_results = []
-    for threshold in np.linspace(0, 1, num=100):
-        f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-            X, y, threshold=threshold
-        )
-        list_of_results.append(
-            {
-                "threshold": threshold,
-                "f1": f1,
-                "roc_auc": roc_auc,
-                "recall": recall,
-                "specificity": specificity,
-                "precision": precision,
-                "pr_auc": pr_auc,
-                "mcc": mcc,
-            }
-        )
-
-    results = pd.DataFrame(list_of_results)
-
-    best_threshold = results[results["mcc"] == results["mcc"].max()][
-        "threshold"
-    ].values[-1]
-
-    results = results.melt(id_vars="threshold")
-    sns.lineplot(data=results, x="threshold", y="value", hue="variable")
-    plt.show()
-    return results, best_threshold
-
-
-results, best_threshold = check_performance_across_thresholds(X_test, y_test)
+results, best_threshold = check_performance_across_thresholds(X_test, y_test, bst)
 
 f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-    X_test, y_test, 0.5
+    X_test, y_test, bst, 0.5
 )
 y_pred = bst.predict_proba(X_test).astype(float)
 y_pred = [1 if x[1] > 0.5 else 0 for x in y_pred]
@@ -229,21 +160,10 @@ results, best_threshold = check_performance_across_thresholds(
 y_pred = bst.predict_proba(X_test_specific).astype(float)
 y_pred = [1 if x[1] > 0.3 else 0 for x in y_pred]
 
-# y_pred = [1 if x >= 6 else 0 for x in test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"]]
 
-f1 = f1_score(y_test_specific.values, y_pred)
-roc_auc = roc_auc_score(
-    y_test_specific.values,
-    bst.predict_proba(X_test_specific).astype(float)[:, 1],
+f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
+    X_test_specific, y_test_specific, bst, 0.3
 )
-recall = recall_score(y_test_specific.values, y_pred)
-specificity = recall_score(y_test_specific.values, y_pred, pos_label=0)
-precision = precision_score(y_test_specific.values, y_pred)
-pr_auc = average_precision_score(
-    y_test_specific.values,
-    bst.predict_proba(X_test_specific).astype(float)[:, 1],
-)
-mcc = matthews_corrcoef(y_test_specific.values, y_pred)
 
 print(f"F1: {f1}")
 print(f"ROC-AUC: {roc_auc}")
@@ -260,84 +180,9 @@ test_specific["y_pred"] = y_pred
 
 outcomes = [x for x in test_specific.columns if "outc" in x]
 
-all_outcomes_confusion_matrix = (
-    test_specific.groupby(
-        ["y_pred", outcomes[0], outcomes[1], outcomes[2], outcomes[3]]
-    )
-    .agg(n=("patientid", "count"))
-    .reset_index()
-)
-
-
-all_outcomes_confusion_matrix = (
-    test_specific.groupby(["y_pred", outcomes[0], outcomes[2]])
-    .agg(n=("patientid", "count"))
-    .reset_index()
-)
-
-all_outcomes_confusion_matrix = (
-    test_specific.groupby(["y_pred", outcomes[2], outcomes[3], outcomes[1]])
-    .agg(n=("patientid", "count"))
-    .reset_index()
-)
-
-all_outcomes_confusion_matrix
-
 test_specific["outc_succesful_treatment_label_within_0_to_1825_days_max_fallback_0"] = (
     test_specific[outcomes[1]] + test_specific[outcomes[3]]
 ).apply(lambda x: min(x, 1))
-
-
-def calculate_CNS_IPI(age, ldh, aa_stage, extranodal, ps, kidneys_diagnosis):
-    # NOTE NOW RETURNING NANS FOR PATIENTS WITH MISSING VALUES
-    import math
-
-    if any(
-        [
-            math.isnan(age),
-            math.isnan(ldh),
-            math.isnan(aa_stage),
-            # math.isnan(extranodal),
-            math.isnan(ps),
-            math.isnan(kidneys_diagnosis),
-        ]
-    ):
-        return pd.NA
-    total_score = 0
-    if age > 60:
-        total_score += 1
-    if age < 70:
-        upper_limit = 205
-    else:
-        upper_limit = 255
-
-    if ldh > upper_limit:
-        total_score += 1
-
-    if ps > 1:
-        total_score += 1
-
-    if aa_stage > 2:
-        total_score += 1
-    if extranodal == 1:
-        total_score += 1
-    if kidneys_diagnosis:
-        total_score += 1
-
-    return total_score
-
-
-WIDE_DATA["CNS_IPI_diagnosis"] = WIDE_DATA.apply(
-    lambda x: calculate_CNS_IPI(
-        x["age_diagnosis"],
-        x["LDH_diagnosis"],  # needs to be normalized
-        x["AA_stage_diagnosis"],
-        x["extranodal_disease_diagnosis"],
-        x["PS_diagnosis"],
-        x["kidneys_diagnosis"],
-    ),
-    axis=1,
-)
 
 test_specific = test_specific.merge(
     WIDE_DATA[["patientid", "CNS_IPI_diagnosis"]]
@@ -348,8 +193,6 @@ y_pred = [
     1 if x >= 6 else 0
     for x in test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"]
 ]
-
-import math
 
 y_pred = [
     0 if (pd.isnull(x)) or x < 4 else 1 for x in test_specific["CNS_IPI_diagnosis"]
@@ -386,31 +229,6 @@ print(confusion_matrix(y_test_specific.values, y_pred))
 
 import shap
 
-# compute SHAP values
-explainer = shap.TreeExplainer(bst)
-shap_values = explainer(X_test)
-
-y_pred = bst.predict_proba(X_test).astype(float)
-
-indexes = [i for i, x in enumerate(y_pred) if x[1] > 0.75]
-shap.plots.waterfall(shap_values[2])
-
-shap_values[indexes]
-
-shap.decision_plot(
-    explainer.expected_value,
-    explainer.shap_values(X_test)[2],
-    X_test.columns,
-    link="logit",
-)
-
-
-shap.summary_plot(
-    shap_values[indexes],
-    X_test.iloc[indexes],
-    feature_names=X_test.columns,
-)
-
 
 feature_names = [
     "Performance status (diagnosis)",
@@ -440,8 +258,6 @@ feature_names = [
     "Count of X-ray scans of the thorax (365 days)",
     "Count of Epstein Virus microbiology findings (90 days)",
 ]
-
-[x for x in X_test_specific.columns if "pred_ord_medicine" in x]
 
 feature_names_original = [
     "pred_RKKP_PS_diagnosis_fallback_-1",
@@ -492,8 +308,8 @@ figure = shap.summary_plot(
 )
 
 
-#plt.savefig("plots/shap_values_dlbcl_only.png", dpi=300, bbox_inches="tight")
-#plt.savefig("plots/shap_values_dlbcl_only.pdf", bbox_inches="tight")
+# plt.savefig("plots/shap_values_dlbcl_only.png", dpi=300, bbox_inches="tight")
+# plt.savefig("plots/shap_values_dlbcl_only.pdf", bbox_inches="tight")
 
 plt.savefig("plots/shap_values.png", dpi=300, bbox_inches="tight")
 plt.savefig("plots/shap_values.pdf", bbox_inches="tight")

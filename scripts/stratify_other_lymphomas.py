@@ -19,7 +19,14 @@ from xgboost import XGBClassifier
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-wide_data = pd.read_pickle("data/WIDE_DATA.pkl")
+from sklearn.metrics import (
+    ConfusionMatrixDisplay,
+)
+
+from helpers.constants import *
+from helpers.processing_helper import *
+
+WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
 
 sns.set_context("paper")
 
@@ -35,7 +42,7 @@ train = feature_matrix[~feature_matrix["patientid"].isin(test_patientids)].reset
     drop=True
 )
 
-pd.Categorical(wide_data["subtype"]).categories
+pd.Categorical(WIDE_DATA["subtype"]).categories
 
 subtype_number = 3
 
@@ -59,29 +66,6 @@ predictor_columns = [
     if x not in ["pred_RKKP_subtype_fallback_-1", "pred_RKKP_hospital_fallback_-1"]
 ]
 
-
-def clip_values(train: pd.DataFrame, test: pd.DataFrame, column: str):
-    relevant_data = train[train[column] != -1][column]
-
-    lower_limit, upper_limit = relevant_data.quantile(0.01), relevant_data.quantile(
-        0.99
-    )
-    train.loc[train[column] != -1, column] = train[train[column] != -1][column].clip(
-        lower=lower_limit, upper=upper_limit
-    )
-    test.loc[test[column] != -1, column] = test[test[column] != -1][column].clip(
-        lower=lower_limit, upper=upper_limit
-    )
-
-
-supplemental_columns = [
-    "pred_RKKP_tumor_diameter_diagnosis_fallback_-1",
-    "pred_RKKP_LDH_diagnosis_fallback_-1",
-    "pred_RKKP_ALB_diagnosis_fallback_-1",
-    "pred_RKKP_TRC_diagnosis_fallback_-1",
-    "pred_RKKP_AA_stage_diagnosis_fallback_-1",
-    "pred_RKKP_extranodal_disease_diagnosis_fallback_-1",
-]
 
 features = list(features)
 
@@ -110,20 +94,6 @@ test_specific = test[
     test["pred_RKKP_subtype_fallback_-1"] == subtype_number
 ].reset_index(drop=True)
 
-# included_treatments = ["chop", "choep", "maxichop"]  # "cop", "minichop"
-
-# WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
-
-# test_specific = test_specific.merge(
-#     WIDE_DATA[["patientid", "regime_1_chemo_type_1st_line"]]
-# )
-
-# test_specific = test_specific[
-#     ~test_specific["regime_1_chemo_type_1st_line"].isin(included_treatments)
-# ].reset_index(drop=True)
-
-# test_specific = test_specific.drop(columns="regime_1_chemo_type_1st_line")
-
 X_test_specific = test_specific[[x for x in test_specific.columns if x in features]]
 y_test_specific = test_specific[outcome]
 
@@ -145,26 +115,7 @@ bst = XGBClassifier(
     random_state=seed,
 )
 
-
-NCCN_IPIS = [
-    "pred_RKKP_age_diagnosis_fallback_-1",
-    "pred_RKKP_LDH_diagnosis_fallback_-1",  # needs to be normalized
-    "pred_RKKP_AA_stage_diagnosis_fallback_-1",
-    "pred_RKKP_extranodal_disease_diagnosis_fallback_-1",
-    "pred_RKKP_PS_diagnosis_fallback_-1",
-]
-
 bst.fit(X_train_smtom, y_train_smtom)
-
-from sklearn.calibration import calibration_curve, CalibrationDisplay
-from sklearn.metrics import brier_score_loss, log_loss
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import (
-    RocCurveDisplay,
-    PrecisionRecallDisplay,
-    ConfusionMatrixDisplay,
-    DetCurveDisplay,
-)
 
 
 def check_performance(X, y, threshold=0.5):
@@ -289,51 +240,9 @@ all_outcomes_confusion_matrix = (
     .reset_index()
 )
 
-all_outcomes_confusion_matrix
-
 test_specific["outc_succesful_treatment_label_within_0_to_1825_days_max_fallback_0"] = (
     test_specific[outcomes[1]] + test_specific[outcomes[3]]
 ).apply(lambda x: min(x, 1))
-
-
-def calculate_CNS_IPI(age, ldh, aa_stage, extranodal, ps, kidneys_diagnosis):
-    # NOTE NOW RETURNING NANS FOR PATIENTS WITH MISSING VALUES
-    import math
-
-    if any(
-        [
-            math.isnan(age),
-            math.isnan(ldh),
-            math.isnan(aa_stage),
-            # math.isnan(extranodal),
-            math.isnan(ps),
-            math.isnan(kidneys_diagnosis),
-        ]
-    ):
-        return pd.NA
-    total_score = 0
-    if age > 60:
-        total_score += 1
-    if age < 70:
-        upper_limit = 205
-    else:
-        upper_limit = 255
-
-    if ldh > upper_limit:
-        total_score += 1
-
-    if ps > 1:
-        total_score += 1
-
-    if aa_stage > 2:
-        total_score += 1
-    if extranodal == 1:
-        total_score += 1
-    if kidneys_diagnosis:
-        total_score += 1
-
-    return total_score
-
 
 WIDE_DATA["CNS_IPI_diagnosis"] = WIDE_DATA.apply(
     lambda x: calculate_CNS_IPI(

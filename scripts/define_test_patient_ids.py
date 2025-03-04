@@ -8,10 +8,10 @@ from timeseriesflattener.aggregators import (
 
 from feature_specification import feature_specs
 from feature_maker.scripts.feature_maker_old import FeatureMaker
+from sklearn.model_selection import train_test_split
+
 
 from data_processing.wide_data import WIDE_DATA
-
-test_patientids = pd.read_csv("data/test_patientids.csv")
 
 CACHED_DATA = True
 INCLUDE_PROXIES = False
@@ -74,24 +74,6 @@ for static_predictor in static_predictors:
 
 from tqdm import tqdm
 
-for feature_spec in tqdm(feature_specs):
-    lookbacks = [dt.timedelta(90), dt.timedelta(365), dt.timedelta(365 * 5)]
-    if "90" in feature_spec.get("data_source"):
-        lookbacks = [dt.timedelta(90)]
-    if "365" in feature_spec.get("data_source"):
-        lookbacks = [dt.timedelta(365)]
-    if "1825" in feature_spec.get("data_source"):
-        lookbacks = [dt.timedelta(1825)]
-
-    # okay this takes a shit ton of time now for some reason
-    feature_maker.add_features_given_ratio(
-        data_source=feature_spec.get("data_source"),
-        agg_funcs=feature_spec.get("agg_funcs"),
-        lookbacks=lookbacks,
-        proportion=feature_spec.get("proportion"),
-        fallback=-1,
-        collapse_rare_conditions_to_feature=True,
-    )
 
 translation_dict = {9: 0, 1: 1}  # 0: np.NAN
 
@@ -188,8 +170,6 @@ if __name__ == "__main__":
         lambda x: f'relapse_{str(x["outc_relapse_within_0_to_730_days_max_fallback_0"])}_death_{str(x["outc_dead_label_within_0_to_730_days_max_fallback_0"])}_disease_{str(x["pred_RKKP_subtype_fallback_-1"])}',
         axis=1,
     )
-
-    from sklearn.model_selection import train_test_split
 
     seed = 46
 

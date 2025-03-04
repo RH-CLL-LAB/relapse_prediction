@@ -1,5 +1,5 @@
 from helpers.sql_helper import *
-from helpers.preprocessing_helper import *
+from helpers.processing_helper import *
 from data_processing.wide_data import lyfo_cohort
 from data_processing.lookup_tables import ATC_LOOKUP_TABLE
 from tqdm import tqdm
@@ -8,9 +8,9 @@ tqdm.pandas()
 
 lab_dict = {
     "LAB_IGHVIMGT": {
-        "Date_sample": "timestamp",
+        "date_sample": "timestamp",
         "patientid": "patientid",
-        "IGHV": "value",
+        "ighv": "value",
     },
     "LAB_BIOBANK_SAMPLES": {
         "patientid": "patientid",

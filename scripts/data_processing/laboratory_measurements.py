@@ -1,5 +1,5 @@
 from helpers.sql_helper import *
-from helpers.preprocessing_helper import *
+from helpers.processing_helper import *
 from data_processing.wide_data import lyfo_cohort, lyfo_cohort_strings
 from data_processing.lookup_tables import NPU_LOOKUP_TABLE
 from wide_data import WIDE_DATA
@@ -118,10 +118,7 @@ lab_measurements_data["value_numeric"] = pd.to_numeric(
     lab_measurements_data["value"], errors="coerce"
 )
 
-
-# yeah, I think it still sort of makes sense to just
-# say that text responses are in here with the
-# rest of them
+# make negative and positive findings string lists
 negatives = [
     "Ubeskyttet",
     "Ej KBA RGH",

@@ -1,5 +1,5 @@
 from helpers.sql_helper import *
-from helpers.preprocessing_helper import *
+from helpers.processing_helper import *
 from data_processing.wide_data import lyfo_cohort_strings
 
 PERSIMUNE_MAPPING = {

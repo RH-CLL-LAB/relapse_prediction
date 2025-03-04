@@ -1,5 +1,5 @@
 from helpers.sql_helper import *
-from helpers.preprocessing_helper import *
+from helpers.processing_helper import *
 
 
 DIAG_LOOKUP_TABLE = load_data_from_table(
