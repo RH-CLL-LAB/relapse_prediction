@@ -32,11 +32,13 @@ from sklearn.metrics import (
     ConfusionMatrixDisplay,
     DetCurveDisplay,
 )
+import joblib
 
 import matplotlib.patches as mpatches
 
 from helpers.constants import *
 from helpers.processing_helper import *
+
 
 # make all math text regular
 params = {"mathtext.default": "regular"}
@@ -44,6 +46,7 @@ plt.rcParams.update(params)
 
 
 wide_data = pd.read_pickle("data/WIDE_DATA.pkl")
+WIDE_DATA = wide_data.copy()
 
 sns.set_context("paper")
 
@@ -52,6 +55,12 @@ test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
 feature_matrix = pd.read_pickle("results/feature_matrix_all.pkl")
 
 features = pd.read_csv("results/feature_names_all.csv")["features"].values
+
+wrong_patientids = wide_data[wide_data["age_diagnosis"].isna()]["patientid"]
+
+feature_matrix = feature_matrix[~feature_matrix["patientid"].isin(wrong_patientids)].reset_index(drop = True)
+
+feature_matrix.replace(-1, np.nan, inplace=True)
 
 
 features = [
@@ -90,32 +99,35 @@ for column in tqdm(features):
     # this should be the way clip values is done
     clip_values(train, test, column)
 
-X_train_smtom, y_train_smtom = (
-    train[[x for x in train.columns if x in features]],
-    train[outcome],
+
+(
+    X_train_smtom,
+    y_train_smtom,
+    X_test,
+    y_test,
+    X_test_specific,
+    y_test_specific,
+    test_specific,
+) = get_features_and_outcomes(
+    train,
+    test,
+    WIDE_DATA,
+    outcome,
+    features,
+    specific_immunotherapy=False,
+    none_chop_like=False,
 )
 
-test_specific = test[test["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
+## load predictions from LR and TabPFN
+lr_probs = joblib.load("results/lr_predictions.pkl")
+tabpfn_probs = joblib.load("results/tabpfn_predictions.pkl")
 
-included_treatments = ["chop", "choep", "maxichop"]  # "cop", "minichop"
+## merging predictions onto test_specific
+test["lr_probs"] = lr_probs["y_pred_proba"]
+test["tabpfn_probs"] = tabpfn_probs["y_pred_proba"]
 
-WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
+test_specific = test_specific.merge(test[["patientid", "lr_probs", "tabpfn_probs"]])
 
-test_specific = test_specific.merge(
-    WIDE_DATA[["patientid", "regime_1_chemo_type_1st_line"]]
-)
-
-test_specific = test_specific[
-    test_specific["regime_1_chemo_type_1st_line"].isin(included_treatments)
-].reset_index(drop=True)
-
-test_specific = test_specific.drop(columns="regime_1_chemo_type_1st_line")
-
-X_test_specific = test_specific[[x for x in test_specific.columns if x in features]]
-y_test_specific = test_specific[outcome]
-
-X_test = test[[x for x in test.columns if x in features]]
-y_test = test[outcome]
 
 bst = XGBClassifier(
     missing=-1,
@@ -152,10 +164,10 @@ plt.savefig("plots/all_variables_calibration.pdf")
 brier_score_loss(y_test_specific, bst.predict_proba(X_test_specific)[:, 1])
 brier_score_loss(y_test, bst.predict_proba(X_test)[:, 1])
 
-results, best_threshold = check_performance_across_thresholds(X_test, y_test)
+results, best_threshold = check_performance_across_thresholds(X_test, y_test, bst, y_pred_proba=[])
 
 f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-    X_test, y_test, 0.2
+    X_test, y_test, bst, 0.2, y_pred_proba=[]
 )
 y_pred = bst.predict_proba(X_test).astype(float)
 y_pred = [1 if x[1] > 0.2 else 0 for x in y_pred]
@@ -170,11 +182,13 @@ print(f"MCC: {mcc}")
 print(confusion_matrix(y_test.values, y_pred))
 
 results, best_threshold = check_performance_across_thresholds(
-    X_test_specific, y_test_specific
+    X_test_specific, y_test_specific, bst, y_pred_proba=[]
 )
 
 y_pred = bst.predict_proba(X_test_specific).astype(float)
-y_pred = [1 if x[1] > 0.3 else 0 for x in y_pred]
+test_specific["y_pred_proba_ml_ipi"] = [x[1] for x in y_pred]
+test_specific.to_csv("data/test_specific_ml_ipi_and_comparators.csv", index = False)
+y_pred = [1 if x[1] > 0.5 else 0 for x in y_pred]
 
 # y_pred = [1 if x >= 6 else 0 for x in test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"]]
 
@@ -200,6 +214,91 @@ print(f"Specificity: {specificity}")
 print(f"PR-AUC: {pr_auc}")
 print(f"MCC: {mcc}")
 print(confusion_matrix(y_test_specific.values, y_pred))
+
+
+def stratified_bootstrap_metrics(
+    y_true, y_pred_proba, y_pred_label, n_bootstraps=1000, seed=42, return_raw_values = False
+):
+    rng = np.random.RandomState(seed)
+    y_true = np.array(y_true)
+    y_pred_proba = np.array(y_pred_proba)
+    y_pred_label = np.array(y_pred_label)
+
+    positive_indices = np.where(y_true == 1)[0]
+    negative_indices = np.where(y_true == 0)[0]
+
+    roc_aucs, pr_aucs = [], []
+    precisions, specificities, recalls, mccs = [], [], [], []
+
+    for _ in tqdm(range(n_bootstraps)):
+        # Stratified resampling
+        pos_sample = rng.choice(positive_indices, size=len(positive_indices), replace=True)
+        neg_sample = rng.choice(negative_indices, size=len(negative_indices), replace=True)
+        sample_indices = np.concatenate([pos_sample, neg_sample])
+        rng.shuffle(sample_indices)
+
+        y_true_bs = y_true[sample_indices]
+        y_pred_proba_bs = y_pred_proba[sample_indices]
+        y_pred_label_bs = y_pred_label[sample_indices]
+
+        try:
+            roc_aucs.append(roc_auc_score(y_true_bs, y_pred_proba_bs))
+            pr_aucs.append(average_precision_score(y_true_bs, y_pred_proba_bs))
+            precisions.append(precision_score(y_true_bs, y_pred_label_bs, zero_division=0))
+            recalls.append(recall_score(y_true_bs, y_pred_label_bs, zero_division=0))
+            mccs.append(matthews_corrcoef(y_true_bs, y_pred_label_bs))
+        
+        # Specificity
+            cm = confusion_matrix(y_true_bs, y_pred_label_bs)
+            tn, fp, fn, tp = cm.ravel()
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+            specificities.append(specificity)
+
+        except:
+            continue
+
+    if return_raw_values:
+        return {"roc_auc": roc_aucs,
+        "pc_auc": pr_aucs,
+        "precision": precisions,
+        "recall": recalls,
+        "specificity": specificities,
+        "mcc": mccs}
+
+    def summary_stats(metric_list):
+        return {
+            "mean": np.mean(metric_list),
+            "ci_lower": np.percentile(metric_list, 2.5),
+            "ci_upper": np.percentile(metric_list, 97.5)
+        }
+
+    return {
+        "roc_auc": summary_stats(roc_aucs),
+        "pr_auc": summary_stats(pr_aucs),
+        "precision": summary_stats(precisions),
+        "recall": summary_stats(recalls),
+        "specificity": summary_stats(specificities),
+        "mcc": summary_stats(mccs),
+    }
+
+## 
+y_pred_proba = bst.predict_proba(X_test)[:, 1]  # Get probabilities for class 1
+y_pred_label = (y_pred_proba >= 0.3).astype(int)  # Apply 0.5 threshold (or whatever you used)
+
+results = stratified_bootstrap_metrics(y_test, y_pred_proba, y_pred_label)
+
+for metric, stats in results.items():
+    print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
+
+## 
+y_pred_proba = bst.predict_proba(X_test_specific)[:, 1]  # Get probabilities for class 1
+y_pred_label = (y_pred_proba >= 0.5).astype(int)  # Apply 0.5 threshold (or whatever you used)
+
+results = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label)
+
+for metric, stats in results.items():
+    print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
+
 
 test_specific["y_pred"] = y_pred
 
@@ -315,20 +414,21 @@ plt.hlines([0.5, 1.5, 2.5], 0, 1, colors="black", linestyles="dotted")
 figure_axis.set_xlim(-0.05, 1.05)
 first_legend = figure_axis.legend(
     ["Treatment Failure", "Treatment Success"],
-    title="Outcome after 2 years",
-    bbox_to_anchor=(1.2605, 0.67),
-    fontsize=12,
-    title_fontsize=13,
+    title="Outcome within 2 years",
+    bbox_to_anchor=(1.235, 0.65),
+    fontsize=11,
+    title_fontsize=11,
+    handletextpad=0.3
 )
-for legend_handle in first_legend.legendHandles:
-    legend_handle.set_sizes([50])
+#for legend_handle in first_legend.legend_handles:
+#    legend_handle.set_sizes([30])
 
 another_legend = plt.legend(
     handles=[low_patch, intermediate_low_patch, intermediate_high_patch, high_patch],
     title="ML$_{\:All}$ Risk Groups",
     bbox_to_anchor=(1.005, 0.5),
-    fontsize=12,
-    title_fontsize=13,
+    fontsize=11,
+    title_fontsize=11,
 )
 
 figure_axis.add_artist(first_legend)
@@ -354,7 +454,7 @@ for item in (
 ):
     item.set_fontsize(15)
 ax2.xaxis.label.set_fontsize(17)
-
+#plt.subplots_adjust(right = 0.8)
 # figure_axis.savefig("plots/test.png", dpi=300, bbox_inches="tight")
 
 plt.savefig("plots/ml_compared_to_nccn_stripplot.png", dpi=300, bbox_inches="tight")
@@ -400,11 +500,6 @@ weird_probabilities_NCCN = [x[1] for x in weird_probabilities_NCCN]
 
 from sklearn.metrics import precision_recall_curve, roc_curve
 
-average_precision_score(y_test_specific.values[indexes], weird_probabilities)
-average_precision_score(y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN)
-roc_auc_score(y_test_specific.values[indexes], weird_probabilities)
-roc_auc_score(y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN)
-
 y_pred = bst.predict_proba(X_test_specific).astype(float)
 
 average_precision_score_ipi = average_precision_score(
@@ -441,9 +536,15 @@ bst.load_model("results/models/model_all.json")
 y_pred = bst.predict_proba(X_test_specific)
 
 
+sns.set_theme(rc={"figure.figsize": (11.7, 8.27)})
+sns.set_style("white")
+
 precision, recall, _ = precision_recall_curve(
     y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN
 )
+
+plt.rcParams["figure.figsize"] = (11.7, 8.27)
+fig, ax = plt.subplots()
 
 display_NCCN = PrecisionRecallDisplay(
     precision,
@@ -452,9 +553,11 @@ display_NCCN = PrecisionRecallDisplay(
         y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN
     ),
     estimator_name="NCCN IPI",
+    #ax=ax
 )
-fig = display_NCCN.plot()
-
+#fig = display_NCCN.plot()
+display_NCCN.plot(ax=ax)
+ax.set_aspect('auto')
 
 precision, recall, _ = precision_recall_curve(
     y_test_specific.values, [x[1] for x in y_pred]
@@ -467,7 +570,8 @@ display_ML_model = PrecisionRecallDisplay(
     ),
     estimator_name="ML$_{\:All}$",
 )
-display_ML_model.plot(ax=fig.ax_)
+display_ML_model.plot(ax=ax)
+ax.set_aspect('auto')
 
 precision, recall, _ = precision_recall_curve(
     y_test_specific.values[indexes], weird_probabilities
@@ -479,7 +583,8 @@ display = PrecisionRecallDisplay(
     average_precision=average_precision_score_dlbcl,
     estimator_name="ML$_{\:DLBCL}$",
 )
-display.plot(ax=fig.ax_)
+display.plot(ax=ax)
+ax.set_aspect('auto')
 
 display_IPI_model = PrecisionRecallDisplay(
     precision_ipi,
@@ -487,20 +592,62 @@ display_IPI_model = PrecisionRecallDisplay(
     average_precision=average_precision_score_ipi,
     estimator_name="ML$_{\:IPI}$",
 )
-display_IPI_model.plot(ax=fig.ax_)
+display_IPI_model.plot(ax=ax)
+ax.set_aspect('auto')
+
+
+precision, recall, _ = precision_recall_curve(
+    y_test_specific.values, test_specific["lr_probs"]
+)
+
+display_LR_model = PrecisionRecallDisplay(
+    precision,
+    recall,
+    average_precision=average_precision_score(
+        y_test_specific.values, test_specific["lr_probs"]
+    ),
+    estimator_name="Logistic Regression",
+)
+display_LR_model.plot(ax=ax)
+ax.set_aspect('auto')
+
+precision, recall, _ = precision_recall_curve(
+    y_test_specific.values, test_specific["tabpfn_probs"]
+)
+
+display_LR_model = PrecisionRecallDisplay(
+    precision,
+    recall,
+    average_precision=average_precision_score(
+        y_test_specific.values, test_specific["tabpfn_probs"]
+    ),
+    estimator_name="TabPFN",
+)
+display_LR_model.plot(ax=ax)
+ax.set_aspect('auto')
+
+pos_rate = y_test_specific.mean()  # proportion of positives
+
+ax.set_xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+
+ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+ax.tick_params(bottom=True, left=True, labelbottom=True, labelleft=True)
+
+ax.hlines(pos_rate, xmin=0, xmax=1, colors="gray", linestyles="--", label=f"Chance (AP = {pos_rate:.2f})")
 
 plt.xlabel("Recall", fontsize=15)
 plt.ylabel("Precision", fontsize=15)
 plt.xticks(fontsize=13)
 plt.yticks(fontsize=13)
 plt.legend(fontsize=13)
+ax.grid(True, linestyle="--", alpha =0.3)
+
 
 plt.savefig("plots/pr_auc.png", dpi=300, bbox_inches="tight")
 plt.savefig("plots/pr_auc.pdf", bbox_inches="tight")
 plt.savefig("plots/pr_auc.svg", bbox_inches="tight")
 
 # make NCCN and IPI comparison
-sns.set_style("white")
 
 precision_ml, recall_ml, thresholds_ml = precision_recall_curve(
     y_test_specific.values, [x[1] for x in y_pred]
@@ -510,6 +657,21 @@ precision_nccn, recall_nccn, thresholds_nccn = precision_recall_curve(
     y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN
 )
 
+### find matches
+
+recall_idx = (np.abs(recall_ml - recall_nccn[6])).argmin()
+
+precision_idx = (np.abs(precision_ml - precision_nccn[6])).argmin()
+
+
+thresholds_ml[precision_idx]
+
+recall_ml[precision_idx]
+precision_ml[precision_idx]
+
+recall_nccn[6]
+
+fig, ax = plt.subplots()
 
 display_NCCN = PrecisionRecallDisplay(
     precision_nccn,
@@ -519,7 +681,8 @@ display_NCCN = PrecisionRecallDisplay(
     ),
     estimator_name="NCCN IPI",
 )
-fig = display_NCCN.plot()
+fig = display_NCCN.plot(ax=ax)
+ax.set_aspect('auto')
 
 
 display_ML_model = PrecisionRecallDisplay(
@@ -530,25 +693,26 @@ display_ML_model = PrecisionRecallDisplay(
     ),
     estimator_name="ML$_{\:All}$",
 )
-display_ML_model.plot(ax=fig.ax_)
+display_ML_model.plot(ax=ax)
+ax.set_aspect('auto')
 
 import seaborn as sns
 
 helper_df = (
     pd.DataFrame(
-        [recall_nccn[6], recall_ml[774]], [precision_nccn[6], precision_ml[774]]
+        [recall_nccn[6], recall_ml[recall_idx]], [precision_nccn[6], precision_ml[recall_idx]]
     )
     .reset_index()
     .rename(columns={"index": "Precision", 0: "Recall"})
 )
 
 sns.lineplot(
-    data=helper_df, x="Recall", y="Precision", dashes=(2, 2), ax=fig.ax_, color="black"
+    data=helper_df, x="Recall", y="Precision", dashes=(2, 2), ax=ax, color="black"
 )
 
 helper_df_2 = (
     pd.DataFrame(
-        [recall_nccn[6], recall_ml[664]], [precision_nccn[6], precision_ml[664]]
+        [recall_nccn[6], recall_ml[precision_idx]], [precision_nccn[6], precision_ml[precision_idx]]
     )
     .reset_index()
     .rename(columns={"index": "Precision", 0: "Recall"})
@@ -559,14 +723,36 @@ sns.lineplot(
     x="Recall",
     y="Precision",
     dashes=(2, 2),
-    ax=fig.ax_,
+    ax=ax,
     color="black",
 )
+ax.set_aspect('auto')
+
+
+pos_rate = y_test_specific.mean()  # proportion of positives
+
+ax.hlines(pos_rate, xmin=-0.02, xmax=1.02, colors="gray", linestyles="--", label=f"Chance (AP = {pos_rate:.2f})")
+
+
+# plt.plot([recall_nccn[6], recall_ml[precision_idx]],
+#          [precision_nccn[6], precision_nccn[6]],
+#          "k--", solid_capstyle="butt")
+
+# plt.plot([recall_ml[recall_idx], recall_ml[recall_idx]],
+#          [precision_nccn[6], precision_ml[recall_idx]],
+#          "k--", solid_capstyle="butt")
+
+# plt.scatter([recall_ml[precision_idx]], [precision_nccn[6]], color="black", zorder = 5, s = 5)
+# plt.scatter([recall_nccn[6]], [precision_ml[recall_idx]], color="black", zorder = 5, s = 5)
+
+
 plt.xlabel("Recall", fontsize=15)
 plt.ylabel("Precision", fontsize=15)
 plt.xticks(fontsize=13)
 plt.yticks(fontsize=13)
 plt.legend(fontsize=13)
+plt.ylim(bottom = 0.25)
+plt.grid(alpha=0.3, linestyle='--', axis='y')
 
 plt.savefig("plots/ml_compared_to_nccn_pr.png", dpi=300, bbox_inches="tight")
 plt.savefig("plots/ml_compared_to_nccn_pr.pdf", bbox_inches="tight")
@@ -574,6 +760,8 @@ plt.savefig("plots/ml_compared_to_nccn_pr.svg", bbox_inches="tight")
 
 ## SAME FOR AUC
 
+
+fig, ax = plt.subplots()
 
 fpr, tpr, _ = roc_curve(y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN)
 
@@ -585,8 +773,9 @@ display_NCCN = RocCurveDisplay(
     ),
     estimator_name="NCCN IPI",
 )
-fig = display_NCCN.plot()
+display_NCCN.plot(ax = ax)
 
+ax.set_aspect('auto')
 
 fpr, tpr, _ = roc_curve(y_test_specific.values, [x[1] for x in y_pred])
 
@@ -596,7 +785,8 @@ display_ML_model = RocCurveDisplay(
     roc_auc=roc_auc_score(y_test_specific.values, [x[1] for x in y_pred]),
     estimator_name="ML$_{\:All}$",
 )
-display_ML_model.plot(ax=fig.ax_)
+display_ML_model.plot(ax = ax)
+ax.set_aspect('auto')
 
 fpr, tpr, _ = roc_curve(y_test_specific.values[indexes], weird_probabilities)
 
@@ -606,7 +796,8 @@ display = RocCurveDisplay(
     roc_auc=roc_auc_score_dlbcl,
     estimator_name="ML$_{\:DLBCL}$",
 )
-display.plot(ax=fig.ax_)
+display.plot(ax = ax)
+ax.set_aspect('auto')
 
 display_IPI_model = RocCurveDisplay(
     fpr=fpr_ipi,
@@ -614,13 +805,46 @@ display_IPI_model = RocCurveDisplay(
     roc_auc=roc_auc_score_ipi,
     estimator_name="ML$_{\:IPI}$",
 )
-display_IPI_model.plot(ax=fig.ax_)
+display_IPI_model.plot(ax = ax)
+ax.set_aspect('auto')
+
+fpr, tpr, _ = roc_curve(y_test_specific, test_specific["lr_probs"])
+
+display = RocCurveDisplay(
+    fpr=fpr,
+    tpr=tpr,
+    roc_auc=roc_auc_score(y_test_specific, test_specific["lr_probs"]),
+    estimator_name="Logistic Regression",
+)
+display.plot(ax = ax)
+ax.set_aspect('auto')
+
+fpr, tpr, _ = roc_curve(y_test_specific, test_specific["tabpfn_probs"])
+
+display = RocCurveDisplay(
+    fpr=fpr,
+    tpr=tpr,
+    roc_auc=roc_auc_score(y_test_specific, test_specific["lr_probs"]),
+    estimator_name="TabPFN",
+)
+display.plot(ax = ax)
+ax.set_aspect('auto')
+
+ax.plot([0, 1], [0, 1], color="gray", linestyle="--", label="Chance (AUC = 0.50)")
 
 plt.xlabel("False Positive Rate", fontsize=15)
 plt.ylabel("True Positive Rate", fontsize=15)
 plt.xticks(fontsize=13)
 plt.yticks(fontsize=13)
 plt.legend(fontsize=13)
+ax.grid(True, linestyle="--", alpha =0.3)
+
+
+ax.set_xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+
+ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+ax.tick_params(bottom=True, left=True, labelbottom=True, labelleft=True)
+
 
 plt.savefig("plots/roc_auc.png", dpi=300, bbox_inches="tight")
 plt.savefig("plots/roc_auc.pdf", bbox_inches="tight")

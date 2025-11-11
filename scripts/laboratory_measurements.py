@@ -5,6 +5,7 @@ from data_processing.lookup_tables import NPU_LOOKUP_TABLE
 from wide_data import WIDE_DATA
 from tqdm import tqdm
 
+
 tqdm.pandas()
 
 lab_dict = {

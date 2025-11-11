@@ -3,6 +3,7 @@ from datetime import timedelta
 import pandas as pd
 import xgboost
 import numpy as np
+import joblib
 
 bst = xgboost.XGBClassifier()
 
@@ -14,73 +15,11 @@ X_test_specific = pd.read_csv("results/X_test_specific.csv")
 test = pd.read_csv("results/test.csv")
 test_specific = pd.read_csv("results/test_specific.csv")
 
+lr_probs = joblib.load("results/lr_predictions.pkl")
 
-def make_NCCN_categorical(nccn):
-    if pd.isnull(nccn):
-        return None
-    if nccn == -1:
-        return None
-    if nccn < 2:
-        return "Low"
-    if nccn < 4:
-        return "Low-Intermediate"
-    if nccn < 6:
-        return "Intermediate-High"
-    if nccn >= 6:
-        return "High"
+test["lr_probs"] = lr_probs["y_pred_proba"]
 
-
-def make_prediction_categorical(y_prob):
-    if pd.isnull(y_prob):
-        return None
-    if y_prob < 0.10:
-        return "Low"
-    if y_prob < 0.2:
-        return "Low-Intermediate"
-    if y_prob < 0.75:
-        return "Intermediate-High"
-    if y_prob >= 0.75:
-        return "High"
-
-
-def make_prediction_categorical(y_prob):
-    if pd.isnull(y_prob):
-        return None
-    if y_prob < 0.04:
-        return "Low"
-    if y_prob < 0.13:
-        return "Low-Intermediate"
-    if y_prob < 0.48:
-        return "Intermediate-High"
-    if y_prob >= 0.48:
-        return "High"
-
-
-def make_prediction_categorical(y_prob):
-    if pd.isnull(y_prob):
-        return None
-    if y_prob < 0.08:
-        return "Low"
-    if y_prob < 0.18:
-        return "Low-Intermediate"
-    if y_prob < 0.4:
-        return "Intermediate-High"
-    if y_prob >= 0.4:
-        return "High"
-
-
-def make_prediction_categorical(y_prob):
-    if pd.isnull(y_prob):
-        return None
-    if y_prob < 0.045:
-        return "Low"
-    if y_prob < 0.16:
-        return "Low-Intermediate"
-    if y_prob < 0.60:
-        return "Intermediate-High"
-    if y_prob >= 0.60:
-        return "High"
-
+test_specific = test_specific.merge(test[["patientid", "lr_probs"]])
 
 def make_prediction_categorical(y_prob):
     if pd.isnull(y_prob):
@@ -107,11 +46,11 @@ test_specific = test_specific.reset_index(drop=True)
 
 WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
 
-WIDE_DATA["NCCN_categorical"] = WIDE_DATA["NCCN_IPI_diagnosis"].apply(
-    make_NCCN_categorical
+test_specific["lr_categorical"] = test_specific["lr_probs"].apply(
+    make_prediction_categorical
 )
 
-test_specific_plotting = test_specific[["patientid", "y_pred"]].merge(WIDE_DATA)
+test_specific_plotting = test_specific[["patientid", "y_pred", "lr_probs", "lr_categorical"]].merge(WIDE_DATA)
 test_specific_plotting["date_event"] = test_specific_plotting["relapse_date"]
 test_specific_plotting.loc[test_specific_plotting["date_event"].notna(), "event"] = 1
 
@@ -136,7 +75,6 @@ test_specific_plotting["group"] = test_specific_plotting["y_pred"].apply(
     lambda x: 1 if x > 0 else 0
 )
 test_specific_plotting["risk_prediction"] = y_prob_categorical
-test_specific_plotting["y_pred"] = [x[1] for x in bst.predict_proba(X_test_specific)]
 # test_specific_plotting = test_specific_plotting[
 #     test_specific_plotting["age_at_tx"] < 75
 # ].reset_index(drop=True)
@@ -147,13 +85,12 @@ test_specific_plotting[
         "days_to_event",
         "event",
         "group",
-        "NCCN_IPI_diagnosis",
-        "NCCN_categorical",
+        "lr_probs",
+        "lr_categorical",
         "risk_prediction",
         "age_at_tx",
-        "y_pred"
     ]
-].to_csv("results/km_data_lyfo_FCR.csv", index=False)
+].to_csv("results/km_data_lyfo_FCR_LR.csv", index=False)
 
 
 test_specific_plotting[test_specific_plotting["age_at_tx"] < 75].reset_index(drop=True)[
@@ -162,12 +99,12 @@ test_specific_plotting[test_specific_plotting["age_at_tx"] < 75].reset_index(dro
         "days_to_event",
         "event",
         "group",
-        "NCCN_IPI_diagnosis",
-        "NCCN_categorical",
+        "lr_probs",
+        "lr_categorical",
         "risk_prediction",
         "age_at_tx",
     ]
-].to_csv("results/km_data_lyfo_FCR_under_75.csv", index=False)
+].to_csv("results/km_data_lyfo_FCR_under_75_LR.csv", index=False)
 
 y_pred = bst.predict_proba(X_test)
 y_prob_categorical = [make_prediction_categorical(x[1]) for x in y_pred]
@@ -177,12 +114,12 @@ test["y_pred"] = adjusted_y_pred_binary
 test = test.reset_index(drop=True)
 
 WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
-WIDE_DATA["NCCN_categorical"] = WIDE_DATA["NCCN_IPI_diagnosis"].apply(
-    make_NCCN_categorical
+test["lr_categorical"] = test["lr_probs"].apply(
+    make_prediction_categorical
 )
 
 
-test_specific_plotting = test[["patientid", "y_pred"]].merge(WIDE_DATA)
+test_specific_plotting = test[["patientid", "y_pred", "lr_probs", "lr_categorical"]].merge(WIDE_DATA)
 test_specific_plotting["date_event"] = test_specific_plotting["relapse_date"]
 test_specific_plotting.loc[test_specific_plotting["date_event"].notna(), "event"] = 1
 
@@ -219,12 +156,12 @@ test_specific_plotting[
         "days_to_event",
         "event",
         "group",
-        "NCCN_IPI_diagnosis",
-        "NCCN_categorical",
+        "lr_probs",
+        "lr_categorical",
         "risk_prediction",
         "age_at_tx",
     ]
-].to_csv("results/km_data_lyfo_FCR_all.csv", index=False)
+].to_csv("results/km_data_lyfo_FCR_all_LR.csv", index=False)
 
 test_specific_plotting[test_specific_plotting["age_at_tx"] < 75].reset_index(drop=True)[
     [
@@ -232,9 +169,9 @@ test_specific_plotting[test_specific_plotting["age_at_tx"] < 75].reset_index(dro
         "days_to_event",
         "event",
         "group",
-        "NCCN_IPI_diagnosis",
-        "NCCN_categorical",
+        "lr_probs",
+        "lr_categorical",
         "risk_prediction",
         "age_at_tx",
     ]
-].to_csv("results/km_data_lyfo_FCR_all_under_75.csv", index=False)
+].to_csv("results/km_data_lyfo_FCR_all_under_75_LR.csv", index=False)

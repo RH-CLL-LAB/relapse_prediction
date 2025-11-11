@@ -112,17 +112,8 @@ WIDE_DATA["NCCN_categorical"] = WIDE_DATA["NCCN_IPI_diagnosis"].apply(
 )
 
 test_specific_plotting = test_specific[["patientid", "y_pred"]].merge(WIDE_DATA)
-test_specific_plotting["date_event"] = test_specific_plotting["relapse_date"]
+test_specific_plotting["date_event"] = test_specific_plotting["date_death"]
 test_specific_plotting.loc[test_specific_plotting["date_event"].notna(), "event"] = 1
-
-test_specific_plotting.loc[
-    test_specific_plotting["date_event"].isna(), "date_event"
-] = test_specific_plotting[test_specific_plotting["relapse_date"].isna()]["date_death"]
-test_specific_plotting.loc[
-    (test_specific_plotting["date_event"].notna())
-    & (test_specific_plotting["event"].isna()),
-    "event",
-] = 2
 test_specific_plotting.loc[test_specific_plotting["date_event"].isna(), "event"] = 0
 # test_specific_plotting.loc[test_specific_plotting["date_event"].isna(), "date_event"] = test_specific_plotting[test_specific_plotting["date_event"].isna()]["date_treatment_1st_line"].apply(lambda x: x + timedelta(days = 730))
 test_specific_plotting.loc[
@@ -153,7 +144,7 @@ test_specific_plotting[
         "age_at_tx",
         "y_pred"
     ]
-].to_csv("results/km_data_lyfo_FCR.csv", index=False)
+].to_csv("results/km_data_lyfo_OS.csv", index=False)
 
 
 test_specific_plotting[test_specific_plotting["age_at_tx"] < 75].reset_index(drop=True)[
@@ -167,7 +158,7 @@ test_specific_plotting[test_specific_plotting["age_at_tx"] < 75].reset_index(dro
         "risk_prediction",
         "age_at_tx",
     ]
-].to_csv("results/km_data_lyfo_FCR_under_75.csv", index=False)
+].to_csv("results/km_data_lyfo_FCR_under_75_OS.csv", index=False)
 
 y_pred = bst.predict_proba(X_test)
 y_prob_categorical = [make_prediction_categorical(x[1]) for x in y_pred]
@@ -183,18 +174,8 @@ WIDE_DATA["NCCN_categorical"] = WIDE_DATA["NCCN_IPI_diagnosis"].apply(
 
 
 test_specific_plotting = test[["patientid", "y_pred"]].merge(WIDE_DATA)
-test_specific_plotting["date_event"] = test_specific_plotting["relapse_date"]
+test_specific_plotting["date_event"] = test_specific_plotting["date_death"]
 test_specific_plotting.loc[test_specific_plotting["date_event"].notna(), "event"] = 1
-
-test_specific_plotting.loc[
-    test_specific_plotting["date_event"].isna(), "date_event"
-] = test_specific_plotting[test_specific_plotting["relapse_date"].isna()]["date_death"]
-test_specific_plotting.loc[
-    (test_specific_plotting["date_event"].notna())
-    & (test_specific_plotting["event"].isna()),
-    "event",
-] = 2
-
 test_specific_plotting.loc[test_specific_plotting["date_event"].isna(), "event"] = 0
 test_specific_plotting.loc[
     test_specific_plotting["date_event"].isna(), "date_event"
@@ -224,7 +205,7 @@ test_specific_plotting[
         "risk_prediction",
         "age_at_tx",
     ]
-].to_csv("results/km_data_lyfo_FCR_all.csv", index=False)
+].to_csv("results/km_data_lyfo_FCR_all_OS.csv", index=False)
 
 test_specific_plotting[test_specific_plotting["age_at_tx"] < 75].reset_index(drop=True)[
     [
@@ -237,4 +218,4 @@ test_specific_plotting[test_specific_plotting["age_at_tx"] < 75].reset_index(dro
         "risk_prediction",
         "age_at_tx",
     ]
-].to_csv("results/km_data_lyfo_FCR_all_under_75.csv", index=False)
+].to_csv("results/km_data_lyfo_FCR_all_under_75_OS.csv", index=False)

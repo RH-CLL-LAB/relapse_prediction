@@ -34,6 +34,13 @@ seed = 46
 test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
 feature_matrix = pd.read_pickle("results/feature_matrix_all.pkl")
 
+
+wrong_patientids = WIDE_DATA[WIDE_DATA["age_diagnosis"].isna()]["patientid"]
+
+feature_matrix = feature_matrix[~feature_matrix["patientid"].isin(wrong_patientids)].reset_index(drop = True)
+
+feature_matrix.replace(-1, np.nan, inplace=True)
+
 features = pd.read_csv("results/feature_names_all.csv")["features"].values
 test = feature_matrix[feature_matrix["patientid"].isin(test_patientids)].reset_index(
     drop=True
@@ -44,11 +51,410 @@ train = feature_matrix[~feature_matrix["patientid"].isin(test_patientids)].reset
 
 pd.Categorical(WIDE_DATA["subtype"]).categories
 
-subtype_number = 3
+
+# PLOT
+
+test["pred_RKKP_subtype_fallback_-1"].value_counts()
+
+
+
+plotting_data = pd.DataFrame(
+    [
+        {
+            "subtype": "DLBCL",
+            "count": 1060,
+            "disease_specific_ap": 0.66,
+            "all_ap": 0.66,
+        },
+        {"subtype": "FL", "count": 332, "disease_specific_ap": 0.38, "all_ap": 0.42},
+        {"subtype": "cHL", "count": 303, "disease_specific_ap": 0.56, "all_ap": 0.58},
+        {"subtype": "MZL", "count": 148, "disease_specific_ap": 0.35, "all_ap": 0.46},
+        {"subtype": "MCL", "count": 139, "disease_specific_ap": 0.63, "all_ap": 0.62},
+        {"subtype": "WM", "count": 107, "disease_specific_ap": 0.50, "all_ap": 0.48},
+        {"subtype": "NHL", "count": 63, "disease_specific_ap": 0.46, "all_ap": 0.73, "all_ap_upper": 0.87, "all_ap_lower": 0.59},
+        {"subtype": "OL", "count": 59, "disease_specific_ap": 0.50, "all_ap": 0.51, "all_ap_upper": 0.87, "all_ap_lower": 0.59},
+        # {"subtype": "SLL", "count": 40, "disease_specific_ap": 0.58, "all_ap": 0.59},
+        # {"subtype": "HD-LP", "count": 21, "disease_specific_ap": 0.58, "all_ap": 0.59},
+    ]
+)
+
+# 0.53
+
+plotting_data = pd.DataFrame(
+    [
+        {
+            "subtype": "DLBCL",
+            "count": 1060,
+            "disease_specific_ap": 0.66,
+            "all_ap": 0.67,
+        },
+        {"subtype": "FL", "count": 332, "disease_specific_ap": 0.38, "all_ap": 0.42},
+        {"subtype": "cHL", "count": 303, "disease_specific_ap": 0.52, "all_ap": 0.58},
+        {"subtype": "MZL", "count": 148, "disease_specific_ap": 0.41, "all_ap": 0.46},
+        {"subtype": "MCL", "count": 139, "disease_specific_ap": 0.62, "all_ap": 0.62},
+        {"subtype": "WM", "count": 107, "disease_specific_ap": 0.54, "all_ap": 0.48},
+        {"subtype": "NHL", "count": 63, "disease_specific_ap": 0.42, "all_ap": 0.73},
+        # {"subtype": "OL", "count": 59, "disease_specific_ap": 0.50, "all_ap": 0.51},
+        # {"subtype": "SLL", "count": 40, "disease_specific_ap": 0.58, "all_ap": 0.51},
+        # {"subtype": "HD-LP", "count": 21, "disease_specific_ap": 0.58, "all_ap": 0.59},
+    ]
+)
+
+plotting_data = plotting_data.rename(
+    columns={"subtype": "Subtype", "count": "Sample size"}
+)
+
+# Set white background and ticks
+sns.set_style("white")
+
+# Optional: use "notebook" context for standard sizing
+sns.set_context("notebook", font_scale=0.85)
+
+# Create your plot
+fig, ax = plt.subplots(figsize=(11 * 0.6, 8 * 0.6))
+
+# plt.figure(figsize=(11*0.7, 8*0.7))
+# or "paper" / "talk" / "poster"
+import matplotlib.patches as mpatches
+
+plotting_data["size_scaled"] = np.sqrt(plotting_data["Sample size"])
+
+# Scatter plot with size scaling
+scatter = sns.scatterplot(
+    data=plotting_data,
+    x="disease_specific_ap",
+    y="all_ap",
+    size="Sample size",
+    hue="Subtype",
+    sizes=(100, 5000),
+    # legend='full',
+    legend=False,  # Turn off default size legend
+    alpha=0.8,
+    palette="tab10",
+    ax=ax,
+)
+# Scatter plot with size scaling
+scatter = sns.scatterplot(
+    data=plotting_data,
+    x="disease_specific_ap",
+    y="all_ap",
+    size=1,
+    # hue='Subtype',
+    # sizes=(100, 5000),
+    color="black",
+    marker="+",
+    # legend='full',
+    legend=False,  # Turn off default size legend
+    alpha=1,
+    palette="tab10",
+    ax=ax,
+)
+# Manually add only the hue legend (colors)
+# Get unique subtypes and plot empty handles for legend
+subtypes = plotting_data["Subtype"].unique()
+palette = sns.color_palette("tab10", len(subtypes))
+
+handles = [
+    plt.Line2D(
+        [0],
+        [0],
+        marker="o",
+        color="w",
+        markerfacecolor=palette[i],
+        markersize=10,
+        label=subtypes[i],
+    )
+    for i in range(len(subtypes))
+]
+
+fig.legend(
+    handles=handles,
+    title="Subtype",
+    #loc="upper left",
+    frameon=True,
+    labelspacing=0.7,
+    bbox_to_anchor=(1.15, 0.7),
+)
+
+# Make all 4 spines visible
+for spine in ax.spines.values():
+    spine.set_visible(True)
+
+# ✅ Force tick marks to be visible on all axes
+ax.tick_params(
+    axis="both",
+    which="both",  # major and minor ticks
+    direction="out",
+    length=6,
+    width=1,
+    bottom=True,
+    top=False,
+    left=True,
+    right=False,
+)
+
+# Diagonal reference line
+max_val = max(plotting_data["disease_specific_ap"].max(), plotting_data["all_ap"].max())
+ax.plot(
+    [0.35 - 0.02, max_val + 0.02], [0.35 - 0.02, max_val + 0.02], "--", color="gray"
+)
+
+# Annotations (optional)
+ax.text(
+    0.44,
+    0.64,
+    "ML$_{\: All}$ model\nperforms better",
+    ha="center",
+    fontsize=10,
+    alpha=0.7,
+)
+ax.text(
+    0.65,
+    0.40,
+    "Subtype specific model\nperforms better",
+    ha="center",
+    fontsize=10,
+    alpha=0.7,
+)
+
+arrow1 = mpatches.FancyArrow(
+    0.53,
+    0.54,
+    -0.15 * 0.5,
+    0.15 * 0.5,
+    width=0.015,
+    head_width=0.05,
+    head_length=0.05,
+    length_includes_head=True,
+    color="gray",
+    alpha=0.7,
+)
+arrow2 = mpatches.FancyArrow(
+    0.54,
+    0.53,
+    0.15 * 0.5,
+    -0.15 * 0.5,
+    width=0.015,
+    head_width=0.05,
+    head_length=0.05,
+    length_includes_head=True,
+    color="gray",
+    alpha=0.7,
+)
+
+fig.gca().add_patch(arrow1)
+fig.gca().add_patch(arrow2)
+
+ax.set_xlabel("PR-AUC for the subtype-specific models")
+ax.set_ylabel("PR-AUC for the ML$_{\: All}$ model")
+# plt.title('AP for Single-Cancer vs Pan-Cancer Models')
+# plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', labelspacing = 0.72, handletextpad=1.0, borderaxespad=0)
+
+ax.set_xlim(0.35 - 0.01, max_val + 0.01)
+ax.set_ylim(0.35 - 0.01, max_val + 0.01)
+ax.tick_params(direction="out", length=10, width=3)
+
+# Force all spines and ticks to show
+for spine in ["top", "right", "bottom", "left"]:
+    ax.spines[spine].set_visible(True)
+
+ax.tick_params(direction="out", length=6, width=1)
+
+fig.tight_layout()
+fig.savefig("plots/subtype_specific_comparison.svg", bbox_inches="tight")
+fig.savefig("plots/subtype_specific_comparison.pdf", bbox_inches="tight")
+fig.savefig("plots/subtype_specific_comparison.png", bbox_inches="tight")
+
+
+sns.set_context("notebook", font_scale=1)
+
+# Create your plot
+fig, ax = plt.subplots(figsize=(11 * 0.5, 8 * 0.5))
+
+# plt.figure(figsize=(11*0.7, 8*0.7))
+# or "paper" / "talk" / "poster"
+import matplotlib.patches as mpatches
+
+plotting_data["size_scaled"] = np.sqrt(plotting_data["Sample size"])
+
+# Scatter plot with size scaling
+scatter = sns.scatterplot(
+    data=plotting_data,
+    x="disease_specific_ap",
+    y="all_ap",
+    size="Sample size",
+    hue="Subtype",
+    sizes=(100, 5000),
+    # legend='full',
+    legend=False,  # Turn off default size legend
+    alpha=0.8,
+    palette="tab10",
+    ax=ax,
+)
+# Scatter plot with size scaling
+scatter = sns.scatterplot(
+    data=plotting_data,
+    x="disease_specific_ap",
+    y="all_ap",
+    size=1,
+    # hue='Subtype',
+    # sizes=(100, 5000),
+    color="black",
+    marker="+",
+    # legend='full',
+    legend=False,  # Turn off default size legend
+    alpha=1,
+    palette="tab10",
+    ax=ax,
+)
+# Manually add only the hue legend (colors)
+# Get unique subtypes and plot empty handles for legend
+subtypes = plotting_data["Subtype"].unique()
+palette = sns.color_palette("tab10", len(subtypes))
+
+handles = [
+    plt.Line2D(
+        [0],
+        [0],
+        marker="o",
+        color="w",
+        markerfacecolor=palette[i],
+        markersize=10,
+        label=subtypes[i],
+    )
+    for i in range(len(subtypes))
+]
+
+fig.legend(
+    handles=handles,
+    title="Subtype",
+    #loc="upper left",
+    frameon=True,
+    labelspacing=0.7,
+    bbox_to_anchor=(1.17, 0.78),
+    fontsize = 10
+)
+
+# Make all 4 spines visible
+for spine in ax.spines.values():
+    spine.set_visible(True)
+
+# ✅ Force tick marks to be visible on all axes
+ax.tick_params(
+    axis="both",
+    which="both",  # major and minor ticks
+    direction="out",
+    length=6,
+    width=1,
+    bottom=True,
+    top=False,
+    left=True,
+    right=False,
+)
+
+# Diagonal reference line
+max_val = max(plotting_data["disease_specific_ap"].max(), plotting_data["all_ap"].max())
+ax.plot(
+    [0.35 - 0.02, max_val + 0.02], [0.35 - 0.02, max_val + 0.02], "--", color="gray"
+)
+
+# Annotations (optional)
+ax.text(
+    0.44,
+    0.64,
+    "ML$_{\: All}$ model\nperforms better",
+    ha="center",
+    fontsize=11,
+    alpha=0.7,
+)
+ax.text(
+    0.65,
+    0.40,
+    "Subtype specific model\nperforms better",
+    ha="center",
+    fontsize=11,
+    alpha=0.7,
+)
+
+arrow1 = mpatches.FancyArrow(
+    0.53,
+    0.54,
+    -0.15 * 0.5,
+    0.15 * 0.5,
+    width=0.015,
+    head_width=0.05,
+    head_length=0.05,
+    length_includes_head=True,
+    color="gray",
+    alpha=0.7,
+)
+arrow2 = mpatches.FancyArrow(
+    0.54,
+    0.53,
+    0.15 * 0.5,
+    -0.15 * 0.5,
+    width=0.015,
+    head_width=0.05,
+    head_length=0.05,
+    length_includes_head=True,
+    color="gray",
+    alpha=0.7,
+)
+
+fig.gca().add_patch(arrow1)
+fig.gca().add_patch(arrow2)
+
+ax.set_xlabel("PR-AUC for the subtype-specific models")
+ax.set_ylabel("PR-AUC for the ML$_{\: All}$ model")
+# plt.title('AP for Single-Cancer vs Pan-Cancer Models')
+# plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', labelspacing = 0.72, handletextpad=1.0, borderaxespad=0)
+
+ax.set_xlim(0.35 - 0.01, max_val + 0.01)
+ax.set_ylim(0.35 - 0.01, max_val + 0.01)
+ax.tick_params(direction="out", length=10, width=3)
+
+# Force all spines and ticks to show
+for spine in ["top", "right", "bottom", "left"]:
+    ax.spines[spine].set_visible(True)
+
+ax.tick_params(direction="out", length=6, width=1)
+
+fig.tight_layout()
+fig.savefig("plots/subtype_specific_comparison_talk.svg", bbox_inches="tight")
+fig.savefig("plots/subtype_specific_comparison_talk.pdf", bbox_inches="tight")
+fig.savefig("plots/subtype_specific_comparison_talk.png", bbox_inches="tight")
+
+
+
+plt.show()
+
+pd.Categorical(WIDE_DATA["subtype"]).categories
+
+
+# PLOT
+
+test["pred_RKKP_subtype_fallback_-1"].value_counts()
+
+subtype_number = 0
+
+train = feature_matrix[~feature_matrix["patientid"].isin(test_patientids)].reset_index(
+    drop=True
+)
+test = feature_matrix[feature_matrix["patientid"].isin(test_patientids)].reset_index(
+    drop=True
+)
+
+
+# train = train[train["pred_RKKP_subtype_fallback_-1"].isin([2,6])].reset_index(
+#     drop=True
+# )
+
 
 # train = train[train["pred_RKKP_subtype_fallback_-1"] == subtype_number].reset_index(
 #     drop=True
 # )
+features = pd.read_csv("results/feature_names_all.csv")["features"].values
+
 
 outcome_column = [x for x in feature_matrix if "outc" in x]
 outcome = outcome_column[-1]
@@ -93,6 +499,13 @@ X_train_smtom, y_train_smtom = (
 test_specific = test[
     test["pred_RKKP_subtype_fallback_-1"] == subtype_number
 ].reset_index(drop=True)
+
+
+test_specific = test[
+    test["pred_RKKP_subtype_fallback_-1"] != 0
+].reset_index(drop=True)
+
+# test_specific = test[test["pred_RKKP_subtype_fallback_-1"].isin([2,6])].reset_index(drop = True)
 
 X_test_specific = test_specific[[x for x in test_specific.columns if x in features]]
 y_test_specific = test_specific[outcome]
@@ -163,28 +576,6 @@ def check_performance_across_thresholds(X, y):
     return results, best_threshold
 
 
-results, best_threshold = check_performance_across_thresholds(X_test, y_test)
-
-f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-    X_test, y_test, 0.5
-)
-y_pred = bst.predict_proba(X_test).astype(float)
-y_pred = [1 if x[1] > 0.5 else 0 for x in y_pred]
-
-print(f"F1: {f1}")
-print(f"ROC-AUC: {roc_auc}")
-print(f"Recall: {recall}")
-print(f"Precision: {precision}")
-print(f"Specificity: {specificity}")
-print(f"PR-AUC: {pr_auc}")
-print(f"MCC: {mcc}")
-print(confusion_matrix(y_test.values, y_pred))
-ConfusionMatrixDisplay(confusion_matrix(y_test.values, y_pred)).plot()
-
-results, best_threshold = check_performance_across_thresholds(
-    X_test_specific, y_test_specific
-)
-
 y_pred = bst.predict_proba(X_test_specific).astype(float)
 y_pred = [1 if x[1] > 0.3 else 0 for x in y_pred]
 
@@ -213,6 +604,84 @@ print(f"PR-AUC: {pr_auc}")
 print(f"MCC: {mcc}")
 print(confusion_matrix(y_test_specific.values, y_pred))
 ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values, y_pred)).plot()
+
+plot_confusion_matrix(confusion_matrix(y_test_specific.values, y_pred))
+plt.savefig("plots/cm_treatment_failure_2_years_ml_all_0.3_OL.pdf", bbox_inches="tight")
+
+
+def stratified_bootstrap_metrics(
+    y_true, y_pred_proba, y_pred_label, n_bootstraps=1000, seed=42, return_raw_values = False
+):
+    rng = np.random.RandomState(seed)
+    y_true = np.array(y_true)
+    y_pred_proba = np.array(y_pred_proba)
+    y_pred_label = np.array(y_pred_label)
+
+    positive_indices = np.where(y_true == 1)[0]
+    negative_indices = np.where(y_true == 0)[0]
+
+    roc_aucs, pr_aucs = [], []
+    precisions, specificities, recalls, mccs = [], [], [], []
+
+    for _ in tqdm(range(n_bootstraps)):
+        # Stratified resampling
+        pos_sample = rng.choice(positive_indices, size=len(positive_indices), replace=True)
+        neg_sample = rng.choice(negative_indices, size=len(negative_indices), replace=True)
+        sample_indices = np.concatenate([pos_sample, neg_sample])
+        rng.shuffle(sample_indices)
+
+        y_true_bs = y_true[sample_indices]
+        y_pred_proba_bs = y_pred_proba[sample_indices]
+        y_pred_label_bs = y_pred_label[sample_indices]
+
+        try:
+            roc_aucs.append(roc_auc_score(y_true_bs, y_pred_proba_bs))
+            pr_aucs.append(average_precision_score(y_true_bs, y_pred_proba_bs))
+            precisions.append(precision_score(y_true_bs, y_pred_label_bs, zero_division=0))
+            recalls.append(recall_score(y_true_bs, y_pred_label_bs, zero_division=0))
+            mccs.append(matthews_corrcoef(y_true_bs, y_pred_label_bs))
+        
+        # Specificity
+            cm = confusion_matrix(y_true_bs, y_pred_label_bs)
+            tn, fp, fn, tp = cm.ravel()
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+            specificities.append(specificity)
+
+        except:
+            continue
+
+    if return_raw_values:
+        return {"roc_auc": roc_aucs,
+        "pc_auc": pr_aucs,
+        "precision": precisions,
+        "recall": recalls,
+        "specificity": specificities,
+        "mcc": mccs}
+
+    def summary_stats(metric_list):
+        return {
+            "mean": np.mean(metric_list),
+            "ci_lower": np.percentile(metric_list, 2.5),
+            "ci_upper": np.percentile(metric_list, 97.5)
+        }
+
+    return {
+        "roc_auc": summary_stats(roc_aucs),
+        "pr_auc": summary_stats(pr_aucs),
+        "precision": summary_stats(precisions),
+        "recall": summary_stats(recalls),
+        "specificity": summary_stats(specificities),
+        "mcc": summary_stats(mccs),
+    }
+
+## 
+y_pred_proba = bst.predict_proba(X_test_specific)[:, 1]  # Get probabilities for class 1
+y_pred_label = (y_pred_proba >= 0.3).astype(int)  # Apply 0.5 threshold (or whatever you used)
+
+results = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label)
+
+for metric, stats in results.items():
+    print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
 
 
 test_specific["y_pred"] = y_pred

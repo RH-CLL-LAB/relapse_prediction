@@ -40,7 +40,8 @@ sns.set_context("paper")
 
 seed = 46
 
-DLBCL_ONLY = True
+DLBCL_ONLY = False
+
 
 WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
 
@@ -65,8 +66,8 @@ if DLBCL_ONLY:
     train = train[train["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
 
 outcome_column = [x for x in feature_matrix if "outc" in x]
-outcome = outcome_column[0]
-#outcome = outcome_column[3]
+outcome = outcome_column[-1]
+# outcome = outcome_column[0]
 col_to_leave = ["patientid", "timestamp", "pred_time_uuid", "group"]
 col_to_leave.extend(outcome_column)
 
@@ -119,7 +120,6 @@ test_with_treatment = test.merge(
     features,
     specific_immunotherapy=False,
     none_chop_like=False,
-    only_DLBCL_filter=False
 )
 
 bst = XGBClassifier(
@@ -148,15 +148,6 @@ NCCN_IPIS = [
 
 bst.fit(X_train_smtom, y_train_smtom)
 
-y_pred = bst.predict_proba(X_test_specific).astype(float)
-
-test_specific["ml_dlbcl_pred_proba"] = [x[1] for x in y_pred]
-
-test_specific.to_csv("data/test_specific_ml_dlbcl.csv", index = False)
-
-y_pred_label = [1 if x[1] > 0.3 else 0 for x in y_pred]
-plot_confusion_matrix(confusion_matrix(y_test_specific.values, y_pred_label))
-plt.savefig("plots/cm_treatment_failure_2_years_ml_all_0.3_no_chop.pdf", bbox_inches="tight")
 
 results, best_threshold = check_performance_across_thresholds(X_test, y_test, bst, y_pred_proba=[])
 
@@ -181,7 +172,7 @@ results, best_threshold = check_performance_across_thresholds(
 )
 
 y_pred = bst.predict_proba(X_test_specific).astype(float)
-y_pred = [1 if x[1] > 0.59 else 0 for x in y_pred]
+y_pred = [1 if x[1] > 0.5 else 0 for x in y_pred]
 
 test_specific["model_highrisk"] = y_pred
 
@@ -261,25 +252,126 @@ results = stratified_bootstrap_metrics(y_test, y_pred_proba, y_pred_label)
 for metric, stats in results.items():
     print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
 
-
-f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-    X_test, y_test, bst, 0.3
-)
-
-print(f"F1: {f1}")
-print(f"ROC-AUC: {roc_auc}")
-print(f"Recall: {recall}")
-print(f"Precision: {precision}")
-print(f"Specificity: {specificity}")
-print(f"PR-AUC: {pr_auc}")
-print(f"MCC: {mcc}")
-print(confusion_matrix(y_test.values, y_pred_label))
-ConfusionMatrixDisplay(confusion_matrix(y_test.values, y_pred_label)).plot()
-
-
 ## 
 y_pred_proba = bst.predict_proba(X_test_specific)[:, 1]  # Get probabilities for class 1
 y_pred_label = (y_pred_proba >= 0.5).astype(int)  # Apply 0.5 threshold (or whatever you used)
+
+with_all_patients = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label, return_raw_values=True)
+without_all_patients = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label, return_raw_values=True)
+
+with_all_patients_df = pd.DataFrame(with_all_patients)
+without_all_patients_df = pd.DataFrame(without_all_patients)
+
+with_all_patients_df = with_all_patients_df.melt(var_name = "Metric")
+without_all_patients_df = without_all_patients_df.melt(var_name = "Metric")
+
+with_all_patients_df["Training Data"] = "Including Temporary IDS"
+without_all_patients_df["Training Data"] = "Excluding Temporary IDS"
+
+plotting_data = pd.concat([with_all_patients_df, without_all_patients_df])
+
+renaming_dict = {
+    "roc_auc": "ROC-AUC",
+    "pc_auc": "PR-AUC",
+    "precision": "Precision",
+    "recall": "Recall",
+    "specificity": "Specificity",
+    "mcc": "MCC"
+}
+
+plotting_data["Metric"] = plotting_data["Metric"].apply(renaming_dict.get)
+
+sns.set_theme(style="whitegrid")
+
+plt.figure(figsize = (8,6))
+
+ax = sns.boxplot(
+    data = plotting_data,
+    y="Metric",
+    x="value",
+    hue = "Training Data",
+
+    width=0.6,
+    fliersize=2,
+    linewidth=1.2
+)
+
+# Prettify
+ax.set_xlabel("Performance metric value", fontsize=13)
+ax.set_ylabel("")
+# ax.set_title("Model performance with vs without temporary IDs", fontsize=14, weight="bold")
+ax.tick_params(axis='x', labelsize=11)
+ax.tick_params(axis='y', labelsize=11)
+
+# Legend
+ax.legend(
+    title="Training Data",
+    #fontsize=11,
+    #title_fontsize=12,
+    loc="lower right",
+    #frameon=True,
+    edgecolor="black"
+)
+
+plt.tight_layout()
+plt.show()
+
+
+# If ticks were disabled globally earlier, turn them back on:
+plt.rcParams.update({
+    "xtick.bottom": True, "xtick.labelbottom": True,
+    "ytick.left": True,   "ytick.labelleft": True
+})
+
+plt.figure(figsize=(8,6))
+ax = sns.boxplot(
+    data=plotting_data,
+    x="Metric",          # categories now on x-axis
+    y="value",           # values on y-axis
+    hue="Training Data",
+    palette=["#1f77b4", "#ff7f0e"],
+    width=0.6,
+    fliersize=2,         # hide outliers (optional)
+    linewidth=1.2
+)
+
+ax.set_ylabel("Performance metric value", fontsize=13)
+ax.set_xlabel("", fontsize=13)
+
+# Tick settings
+#ax.set_xticks(np.arange(len(plotting_data["Metric"].unique())))  # categorical ticks
+#ax.set_xticklabels(plotting_data["Metric"].unique(), rotation=20, fontsize=11)
+
+#ax.set_yticks(np.arange(0.2, 1.05, 0.1))  # fixed ticks on y-axis
+#ax.tick_params(axis='y', labelsize=11)
+
+ax.tick_params(axis='x', labelsize=11, rotation=20)  # tilt labels a bit
+ax.tick_params(axis='y', labelsize=12)
+
+ax.yaxis.grid(True, linestyle="--", alpha=0.7)
+
+# Legend above
+ax.legend(
+    title="Training Data",
+    loc="lower left",
+    #bbox_to_anchor=(1, 0.5),
+    #ncol=2,
+    #frameon=False
+)
+
+plt.tight_layout()
+plt.savefig("plots/with_without_ids_comparison.png", dpi=300, bbox_inches="tight")
+plt.savefig("plots/with_without_ids_comparison.pdf", bbox_inches="tight")
+plt.show()
+
+sns.stripplot(
+    data = plotting_data,
+    y="Metric",
+    x="value",
+    #jitter = 0.1,
+    hue = "Training Data",
+    dodge = True,
+)
 
 results = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label)
 
@@ -299,10 +391,11 @@ print(f"Precision: {precision}")
 print(f"Specificity: {specificity}")
 print(f"PR-AUC: {pr_auc}")
 print(f"MCC: {mcc}")
-print(confusion_matrix(y_test_specific.values, y_pred_label))
-ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values, y_pred_label)).plot()
+print(confusion_matrix(y_test_specific.values, y_pred))
+ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values, y_pred)).plot()
 
-test_specific["y_pred"] = y_pred_label
+
+test_specific["y_pred"] = y_pred
 
 outcomes = [x for x in test_specific.columns if "outc" in x]
 
@@ -331,9 +424,6 @@ from sklearn.metrics import precision_recall_curve, roc_curve
 weird_probabilities_NCCN = (
     test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"] / 9
 ).values
-test_specific["nccn_ipi_pred_proba"] = weird_probabilities_NCCN
-test_specific.to_csv("data/test_specific_nccn_ipi.csv", index = False)
-
 weird_probabilities_NCCN = [
     (i, x) for i, x in enumerate(weird_probabilities_NCCN) if pd.notnull(x)
 ]
@@ -354,30 +444,15 @@ for metric, stats in results.items():
     print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
 
 
-pr_auc = average_precision_score(y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN)
-roc_auc = roc_auc_score(y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN)
-f1 = f1_score(y_test_specific.values[indexes_NCCN], y_pred_label)
+average_precision_score(y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN)
+roc_auc_score(y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN)
 
-recall = recall_score(y_test_specific.values[indexes_NCCN], y_pred_label)
-specificity = recall_score(y_test_specific.values[indexes_NCCN], y_pred_label, pos_label=0)
-precision = precision_score(y_test_specific.values[indexes_NCCN], y_pred_label)
-mcc = matthews_corrcoef(y_test_specific.values[indexes_NCCN], y_pred_label)
-print(f"F1: {f1}")
-print(f"ROC-AUC: {roc_auc}")
-print(f"Recall: {recall}")
-print(f"Precision: {precision}")
-print(f"Specificity: {specificity}")
-print(f"PR-AUC: {pr_auc}")
-print(f"MCC: {mcc}")
-print(confusion_matrix(y_test_specific.values[indexes_NCCN], y_pred_label))
-ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values[indexes_NCCN], y_pred_label)).plot()
-
-plot_confusion_matrix(confusion_matrix(y_test_specific.values[indexes_NCCN], y_pred_label))
-plt.savefig("plots/cm_treatment_failure_2_years_nccn_ipi.pdf", bbox_inches="tight")
 
 
 y_pred = bst.predict_proba(X_test_specific).astype(float)
 y_pred = [1 if x[1] > 0.2 else 0 for x in y_pred]
+
+y_test_specific = test_specific[outcomes[1]]
 
 f1 = f1_score(y_test_specific.values, y_pred)
 roc_auc = roc_auc_score(
@@ -393,27 +468,6 @@ pr_auc = average_precision_score(
 )
 mcc = matthews_corrcoef(y_test_specific.values, y_pred)
 
-y_test_specific = test_specific[outcome_column[-1]]
-
-## other outcomes
-
-y_test_specific = test_specific[outcome_column[3]]
-
-## 
-y_pred_proba = bst.predict_proba(X_test_specific)[:, 1]  # Get probabilities for class 1
-y_pred_label = (y_pred_proba >= 0.3).astype(int)  # Apply 0.5 threshold (or whatever you used)
-
-results = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label)
-
-for metric, stats in results.items():
-    print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
-
-
-
-f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-    X_test_specific, y_test_specific, bst, 0.3
-)
-
 print(f"F1: {f1}")
 print(f"ROC-AUC: {roc_auc}")
 print(f"Recall: {recall}")
@@ -421,10 +475,7 @@ print(f"Precision: {precision}")
 print(f"Specificity: {specificity}")
 print(f"PR-AUC: {pr_auc}")
 print(f"MCC: {mcc}")
-print(confusion_matrix(y_test_specific.values, y_pred_label))
-ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values, y_pred_label)).plot()
-
-
+print(confusion_matrix(y_test_specific.values, y_pred))
 
 import shap
 
@@ -596,36 +647,6 @@ for i in tqdm(features):
             )
         else:
             corr_matrix.loc[i, j] = np.nan
-
-# Flatten upper triangle
-corr_values = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)).stack()
-
-# Absolute correlations (optional)
-corr_values = corr_values.abs()
-
-bins = np.arange(0, 1.1, 0.1)  # 0.0–1.0
-bin_labels = [f"{bins[i]:.1f}-{bins[i+1]:.1f}" for i in range(len(bins)-1)]
-
-# For each variable, get correlations with others
-corr_counts = (
-    corr_matrix.abs()
-    .apply(lambda x: pd.cut(x, bins=bins, labels=bin_labels).value_counts())
-    .fillna(0)
-    .astype(int)
-    .T
-)
-
-plt.figure(figsize=(6,4))
-plt.hist(corr_values, bins=bins, color='#4A90E2', edgecolor='black', alpha=0.8)
-plt.xlabel('Absolute correlation between feature pairs', fontsize=11)
-plt.ylabel('Number of feature pairs', fontsize=11)
-#plt.title('Distribution of pairwise feature correlations', fontsize=12, pad=10)
-plt.grid(axis='y', linestyle='--', alpha=0.4)
-plt.tight_layout()
-plt.savefig("plots/feature_correlation_histogram.pdf", bbox_inches="tight")
-plt.show()
-
-
 # Plot heatmap
 
 corr_clean = corr_matrix.astype(float).copy()
@@ -693,7 +714,6 @@ feature_importance_df["latex_string"] = feature_importance_df.apply(
 
 feature_importance_df["latex_string"]
 
-
 feature_importance_df.to_csv("tables/feature_importance_df.csv", index=False, sep=";")
 
 
@@ -716,19 +736,6 @@ figure = shap.summary_plot(
     max_display=20,
     show=False,
 )
-
-
-
-plt.savefig("plots/shap_values.png", dpi=300, bbox_inches="tight")
-plt.savefig("plots/shap_values.pdf", bbox_inches="tight")
-plt.savefig("plots/shap_values.svg", bbox_inches="tight")
-
-
-
-# plt.savefig("plots/shap_values_dlbcl_only.png", dpi=300, bbox_inches="tight")
-# plt.savefig("plots/shap_values_dlbcl_only.pdf", bbox_inches="tight")
-
-
 
 bst.save_model("results/models/model_all.json")
 test_specific.to_csv("results/test_specific.csv", index=False)
@@ -762,14 +769,19 @@ plt.plot(lims, lims, "k--", alpha=0.8)
 # Labels
 plt.xlabel("Mean |SHAP| (Training set)")
 plt.ylabel("Mean |SHAP| (Test set)")
-#plt.title("Training vs Testset SHAP Feature Importance")
+plt.title("Training vs Testset SHAP Feature Importance")
 
 offsets = [(5,5), (-5,5), (5,-5), (-5,-5), (10,0)]
 top_idx = np.argsort(mean_shap_val)[-10:]
 
-plt.savefig("plots/shap_train_test_scatter.png", dpi=300, bbox_inches="tight")
-plt.savefig("plots/shap_train_test_scatter.pdf", bbox_inches="tight")
-
+for j, i in enumerate(top_idx):
+    dx, dy = offsets[j % len(offsets)]
+    plt.annotate(
+        feature_names[i],
+        (mean_shap_train[i], mean_shap_val[i]),
+        xytext=(dx, dy), textcoords="offset points",
+        fontsize=8, arrowprops=dict(arrowstyle="->", color="gray", lw=0.5)
+    )
 
 plt.show()
 
@@ -805,8 +817,4 @@ plt.xlabel("Mean |SHAP| Value")
 plt.ylabel("")
 plt.legend(title="Dataset")
 plt.tight_layout()
-
-plt.savefig("plots/shap_train_test_bar.png", dpi=300, bbox_inches="tight")
-plt.savefig("plots/shap_train_test_bar.pdf", bbox_inches="tight")
-
 plt.show()

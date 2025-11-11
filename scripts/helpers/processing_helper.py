@@ -16,6 +16,7 @@ from sklearn.metrics import (
 import seaborn as sns
 import matplotlib.pyplot as plt
 import math
+from tqdm import tqdm
 
 
 def clip_values(train: pd.DataFrame, test: pd.DataFrame, column: str):
@@ -32,27 +33,30 @@ def clip_values(train: pd.DataFrame, test: pd.DataFrame, column: str):
     )
 
 
-def check_performance(X, y, model, threshold=0.5):
-    y_pred = model.predict_proba(X).astype(float)
-    y_pred = [1 if x[1] > threshold else 0 for x in y_pred]
+def check_performance(X, y, model, threshold=0.5, y_pred_proba=[]):
+    if len(y_pred_proba):
+        y_pred = [1 if x > threshold else 0 for x in y_pred_proba]
+    else:
+        y_pred_proba = model.predict_proba(X).astype(float)[:, 1]
+        y_pred = [1 if x > threshold else 0 for x in y_pred_proba]
 
     f1 = f1_score(y.values, y_pred)
-    roc_auc = roc_auc_score(y.values, model.predict_proba(X).astype(float)[:, 1])
+    roc_auc = roc_auc_score(y.values, y_pred_proba)
     recall = recall_score(y.values, y_pred)
     specificity = recall_score(y.values, y_pred, pos_label=0)
     precision = precision_score(y.values, y_pred, zero_division=1)
     pr_auc = average_precision_score(
-        y.values, model.predict_proba(X).astype(float)[:, 1]
+        y.values, y_pred_proba
     )
     mcc = matthews_corrcoef(y.values, y_pred)
     return f1, roc_auc, recall, specificity, precision, pr_auc, mcc
 
 
-def check_performance_across_thresholds(X, y, model):
+def check_performance_across_thresholds(X, y, model, y_pred_proba = []):
     list_of_results = []
-    for threshold in np.linspace(0, 1, num=100):
+    for threshold in tqdm(np.linspace(0, 1, num=100)):
         f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-            X, y, model, threshold=threshold
+            X, y, model, threshold=threshold, y_pred_proba=y_pred_proba
         )
         list_of_results.append(
             {
@@ -139,13 +143,9 @@ def calculate_CNS_IPI(age, ldh, aa_stage, extranodal, ps, kidneys_diagnosis):
 
 
 def get_features_and_outcomes(
-    train,
-    test,
-    WIDE_DATA,
-    outcome,
-    col_to_leave,
+    train, test, WIDE_DATA, outcome, feature_list, specific_immunotherapy=False, none_chop_like = False, only_DLBCL_filter = False,
 ):
-    X_train_smtom = train[[x for x in train.columns if x not in col_to_leave]]
+    X_train_smtom = train[[x for x in train.columns if x in feature_list]]
     y_train_smtom = train[outcome]
 
     test_specific = test[test["pred_RKKP_subtype_fallback_-1"] == 0]
@@ -153,21 +153,35 @@ def get_features_and_outcomes(
     included_treatments = ["chop", "choep", "maxichop"]
 
     test_specific = test_specific.merge(
-        WIDE_DATA[["patientid", "regime_1_chemo_type_1st_line"]]
+        WIDE_DATA[
+            ["patientid", "regime_1_chemo_type_1st_line", "immunotherapy_type_1st_line"]
+        ]
+    )
+    if only_DLBCL_filter == False:
+        if none_chop_like:
+            test_specific = test_specific[
+            ~test_specific["regime_1_chemo_type_1st_line"].isin(included_treatments)
+        ].reset_index(drop=True)
+        else:
+            test_specific = test_specific[
+                test_specific["regime_1_chemo_type_1st_line"].isin(included_treatments)
+            ].reset_index(drop=True)
+
+        if specific_immunotherapy:
+            test_specific = test_specific[
+                test_specific["immunotherapy_type_1st_line"] == "rituximab"
+            ].reset_index(drop=True)
+
+    test_specific = test_specific.drop(
+        columns=["regime_1_chemo_type_1st_line", "immunotherapy_type_1st_line"]
     )
 
-    test_specific = test_specific[
-        test_specific["regime_1_chemo_type_1st_line"].isin(included_treatments)
-    ].reset_index(drop=True)
-
-    test_specific = test_specific.drop(columns="regime_1_chemo_type_1st_line")
-
     X_test_specific = test_specific[
-        [x for x in test_specific.columns if x not in col_to_leave]
+        [x for x in test_specific.columns if x in feature_list]
     ]
     y_test_specific = test_specific[outcome]
 
-    X_test = test[[x for x in test.columns if x not in col_to_leave]]
+    X_test = test[[x for x in test.columns if x in feature_list]]
     y_test = test[outcome]
 
     return (
@@ -179,3 +193,30 @@ def get_features_and_outcomes(
         y_test_specific,
         test_specific,
     )
+
+def plot_confusion_matrix(cm, tick_labels = ["Treatment Success", "Treatment Failure"]):
+    fig, ax = plt.subplots()
+
+    cm_norm = cm.astype("float") / cm.sum(axis=1)[:, np.newaxis]
+
+    sns.heatmap(cm_norm, annot=False, fmt="magma",
+                xticklabels=tick_labels,
+                yticklabels=tick_labels,
+                cbar=True, ax=ax,
+                vmin=0,
+                vmax=1)
+
+    cbar = ax.collections[0].colorbar
+    cbar.set_label("Row-normalized proportion", rotation=270, labelpad=15)
+
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            value = cm_norm[i, j]
+            text_color = "white" if value < 0.5 else "black"
+            ax.text(j+0.5, i+0.5,
+                    f"{cm[i,j]}\n({cm_norm[i,j]*100:.1f}%)",
+                    ha="center", va="center", color=text_color)
+
+    plt.xlabel("Predicted label")
+    plt.ylabel("True label")
+    return fig

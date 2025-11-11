@@ -40,7 +40,7 @@ sns.set_context("paper")
 
 seed = 46
 
-DLBCL_ONLY = True
+DLBCL_ONLY = False
 
 WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
 
@@ -65,8 +65,8 @@ if DLBCL_ONLY:
     train = train[train["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
 
 outcome_column = [x for x in feature_matrix if "outc" in x]
-outcome = outcome_column[0]
-#outcome = outcome_column[3]
+outcome = outcome_column[-1]
+# outcome = outcome_column[0]
 col_to_leave = ["patientid", "timestamp", "pred_time_uuid", "group"]
 col_to_leave.extend(outcome_column)
 
@@ -117,9 +117,6 @@ test_with_treatment = test.merge(
     WIDE_DATA,
     outcome,
     features,
-    specific_immunotherapy=False,
-    none_chop_like=False,
-    only_DLBCL_filter=False
 )
 
 bst = XGBClassifier(
@@ -146,24 +143,114 @@ NCCN_IPIS = [
     "pred_RKKP_PS_diagnosis_fallback_-1",
 ]
 
-bst.fit(X_train_smtom, y_train_smtom)
+from sklearn.feature_selection import RFECV, RFE
+from sklearn.metrics import get_scorer_names
+from sklearn.model_selection import StratifiedKFold
 
-y_pred = bst.predict_proba(X_test_specific).astype(float)
 
-test_specific["ml_dlbcl_pred_proba"] = [x[1] for x in y_pred]
+min_features_to_select = 1  # Minimum number of features to consider
+cv = StratifiedKFold(5, random_state=seed)
 
-test_specific.to_csv("data/test_specific_ml_dlbcl.csv", index = False)
+rfecv = RFECV(
+    estimator=bst,
+    step=1,
+    cv=cv,
+    scoring="average_precision",
+    min_features_to_select=min_features_to_select,
+    n_jobs=10,
+    verbose=1,
+)
+rfecv.fit(X_train_smtom, y_train_smtom)
 
-y_pred_label = [1 if x[1] > 0.3 else 0 for x in y_pred]
-plot_confusion_matrix(confusion_matrix(y_test_specific.values, y_pred_label))
-plt.savefig("plots/cm_treatment_failure_2_years_ml_all_0.3_no_chop.pdf", bbox_inches="tight")
+import pickle
 
-results, best_threshold = check_performance_across_thresholds(X_test, y_test, bst, y_pred_proba=[])
+#
+# Create your model here (same as above)
+#
+
+# Save to file in the current working directory
+pkl_filename = "RFECV_model.pkl"
+with open(pkl_filename, "wb") as file:
+    pickle.dump(rfecv, file)
+
+with open(pkl_filename, "rb") as file:
+    rfecv = pickle.load(file)
+
+print(f"Optimal number of features: {rfecv.n_features_}")
+
+data = {
+    key: value
+    for key, value in rfecv.cv_results_.items()
+    if key in ["mean_test_score", "std_test_score"]
+}
+data["n_features"] = np.array([x for x in range(len(X_train_smtom.columns))])
+cv_results = pd.DataFrame(data)
+plt.figure(figsize=(9, 6))
+plt.xlabel("Number of features selected")
+plt.ylabel("Average precision (PR-AUC)")
+plt.errorbar(
+    x=cv_results["n_features"],
+    y=cv_results["mean_test_score"],
+    yerr=cv_results["std_test_score"],
+    capsize=2,
+)
+plt.grid(visible=True)
+# plt.title("Recursive Feature Elimination \nwith correlated features")
+plt.savefig("plots/recursive_feature_elimination.pdf")
+
+X_train_smtom.columns[~rfecv.get_support()]
+
+selector = RFE(bst, n_features_to_select=50, step=1)
+selector.fit(X_train_smtom, y_train_smtom)
+
+X_train_smtom.columns[~selector.get_support()]
+
+selector.get_feature_names_out()
+
+# Save to file in the current working directory
+pkl_filename = "RFE50_model.pkl"
+with open(pkl_filename, "wb") as file:
+    pickle.dump(selector, file)
+
+
+selector = RFE(bst, n_features_to_select=30, step=1, verbose=True)
+selector.fit(X_train_smtom, y_train_smtom)
+
+X_train_smtom.columns[~selector.get_support()]
+
+selector.get_feature_names_out()
+
+# Save to file in the current working directory
+pkl_filename = "RFE30_model.pkl"
+
+with open(pkl_filename, "rb") as file:
+    selector = pickle.load(file)
+
+with open(pkl_filename, "wb") as file:
+    pickle.dump(selector, file)
+
+features_30 = selector.get_feature_names_out()
+
+features_30
+
+
+pkl_filename = "RFE50_model.pkl"
+with open(pkl_filename, "rb") as file:
+    selector = pickle.load(file)
+
+features_50 = selector.get_feature_names_out()
+
+
+bst.fit(X_train_smtom[features_30], y_train_smtom)
+
+results, best_threshold = check_performance_across_thresholds(
+    X_test[features_30], y_test, bst
+)
 
 f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-    X_test, y_test, bst, 0.5
+    X_test[features_30], y_test, bst, 0.5
 )
-y_pred = bst.predict_proba(X_test).astype(float)
+y_pred = bst.predict_proba(X_test[features_30]).astype(float)
 y_pred = [1 if x[1] > 0.5 else 0 for x in y_pred]
 
 print(f"F1: {f1}")
@@ -177,93 +264,16 @@ print(confusion_matrix(y_test.values, y_pred))
 ConfusionMatrixDisplay(confusion_matrix(y_test.values, y_pred)).plot()
 
 results, best_threshold = check_performance_across_thresholds(
-    X_test_specific, y_test_specific, bst, y_pred_proba=[]
+    X_test_specific[features_30], y_test_specific, bst
 )
 
-y_pred = bst.predict_proba(X_test_specific).astype(float)
-y_pred = [1 if x[1] > 0.59 else 0 for x in y_pred]
+y_pred = bst.predict_proba(X_test_specific[features_30]).astype(float)
+y_pred = [1 if x[1] > 0.5 else 0 for x in y_pred]
 
 test_specific["model_highrisk"] = y_pred
 
-from sklearn.utils import resample
-
-def stratified_bootstrap_metrics(
-    y_true, y_pred_proba, y_pred_label, n_bootstraps=1000, seed=42, return_raw_values = False
-):
-    rng = np.random.RandomState(seed)
-    y_true = np.array(y_true)
-    y_pred_proba = np.array(y_pred_proba)
-    y_pred_label = np.array(y_pred_label)
-
-    positive_indices = np.where(y_true == 1)[0]
-    negative_indices = np.where(y_true == 0)[0]
-
-    roc_aucs, pr_aucs = [], []
-    precisions, specificities, recalls, mccs = [], [], [], []
-
-    for _ in tqdm(range(n_bootstraps)):
-        # Stratified resampling
-        pos_sample = rng.choice(positive_indices, size=len(positive_indices), replace=True)
-        neg_sample = rng.choice(negative_indices, size=len(negative_indices), replace=True)
-        sample_indices = np.concatenate([pos_sample, neg_sample])
-        rng.shuffle(sample_indices)
-
-        y_true_bs = y_true[sample_indices]
-        y_pred_proba_bs = y_pred_proba[sample_indices]
-        y_pred_label_bs = y_pred_label[sample_indices]
-
-        try:
-            roc_aucs.append(roc_auc_score(y_true_bs, y_pred_proba_bs))
-            pr_aucs.append(average_precision_score(y_true_bs, y_pred_proba_bs))
-            precisions.append(precision_score(y_true_bs, y_pred_label_bs, zero_division=0))
-            recalls.append(recall_score(y_true_bs, y_pred_label_bs, zero_division=0))
-            mccs.append(matthews_corrcoef(y_true_bs, y_pred_label_bs))
-        
-        # Specificity
-            cm = confusion_matrix(y_true_bs, y_pred_label_bs)
-            tn, fp, fn, tp = cm.ravel()
-            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-            specificities.append(specificity)
-
-        except:
-            continue
-
-    if return_raw_values:
-        return {"roc_auc": roc_aucs,
-        "pc_auc": pr_aucs,
-        "precision": precisions,
-        "recall": recalls,
-        "specificity": specificities,
-        "mcc": mccs}
-
-    def summary_stats(metric_list):
-        return {
-            "mean": np.mean(metric_list),
-            "ci_lower": np.percentile(metric_list, 2.5),
-            "ci_upper": np.percentile(metric_list, 97.5)
-        }
-
-    return {
-        "roc_auc": summary_stats(roc_aucs),
-        "pr_auc": summary_stats(pr_aucs),
-        "precision": summary_stats(precisions),
-        "recall": summary_stats(recalls),
-        "specificity": summary_stats(specificities),
-        "mcc": summary_stats(mccs),
-    }
-
-## 
-y_pred_proba = bst.predict_proba(X_test)[:, 1]  # Get probabilities for class 1
-y_pred_label = (y_pred_proba >= 0.3).astype(int)  # Apply 0.5 threshold (or whatever you used)
-
-results = stratified_bootstrap_metrics(y_test, y_pred_proba, y_pred_label)
-
-for metric, stats in results.items():
-    print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
-
-
 f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-    X_test, y_test, bst, 0.3
+    X_test_specific[features_30], y_test_specific, bst, 0.5
 )
 
 print(f"F1: {f1}")
@@ -273,36 +283,11 @@ print(f"Precision: {precision}")
 print(f"Specificity: {specificity}")
 print(f"PR-AUC: {pr_auc}")
 print(f"MCC: {mcc}")
-print(confusion_matrix(y_test.values, y_pred_label))
-ConfusionMatrixDisplay(confusion_matrix(y_test.values, y_pred_label)).plot()
+print(confusion_matrix(y_test_specific.values, y_pred))
+ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values, y_pred)).plot()
 
 
-## 
-y_pred_proba = bst.predict_proba(X_test_specific)[:, 1]  # Get probabilities for class 1
-y_pred_label = (y_pred_proba >= 0.5).astype(int)  # Apply 0.5 threshold (or whatever you used)
-
-results = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label)
-
-for metric, stats in results.items():
-    print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
-
-
-
-f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-    X_test_specific, y_test_specific, bst, 0.5
-)
-
-print(f"F1: {f1}")
-print(f"ROC-AUC: {roc_auc}")
-print(f"Recall: {recall}")
-print(f"Precision: {precision}")
-print(f"Specificity: {specificity}")
-print(f"PR-AUC: {pr_auc}")
-print(f"MCC: {mcc}")
-print(confusion_matrix(y_test_specific.values, y_pred_label))
-ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values, y_pred_label)).plot()
-
-test_specific["y_pred"] = y_pred_label
+test_specific["y_pred"] = y_pred
 
 outcomes = [x for x in test_specific.columns if "outc" in x]
 
@@ -326,58 +311,11 @@ test_specific["NCCN_highrisk"] = y_pred
 #     0 if (pd.isnull(x)) or x < 4 else 1 for x in test_specific["CNS_IPI_diagnosis"]
 # ]
 
-from sklearn.metrics import precision_recall_curve, roc_curve
-
-weird_probabilities_NCCN = (
-    test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"] / 9
-).values
-test_specific["nccn_ipi_pred_proba"] = weird_probabilities_NCCN
-test_specific.to_csv("data/test_specific_nccn_ipi.csv", index = False)
-
-weird_probabilities_NCCN = [
-    (i, x) for i, x in enumerate(weird_probabilities_NCCN) if pd.notnull(x)
-]
-indexes_NCCN = [x[0] for x in weird_probabilities_NCCN]
-weird_probabilities_NCCN = [x[1] for x in weird_probabilities_NCCN]
-
-y_pred_label = [
-    1 if x >= 6 else 0
-    for x in test_specific.iloc[indexes_NCCN]["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"]
-]
-
-y_test_nccn = y_test_specific.iloc[indexes_NCCN]
-
-## 
-results = stratified_bootstrap_metrics(y_test_nccn, weird_probabilities_NCCN, y_pred_label)
-
-for metric, stats in results.items():
-    print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
-
-
-pr_auc = average_precision_score(y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN)
-roc_auc = roc_auc_score(y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN)
-f1 = f1_score(y_test_specific.values[indexes_NCCN], y_pred_label)
-
-recall = recall_score(y_test_specific.values[indexes_NCCN], y_pred_label)
-specificity = recall_score(y_test_specific.values[indexes_NCCN], y_pred_label, pos_label=0)
-precision = precision_score(y_test_specific.values[indexes_NCCN], y_pred_label)
-mcc = matthews_corrcoef(y_test_specific.values[indexes_NCCN], y_pred_label)
-print(f"F1: {f1}")
-print(f"ROC-AUC: {roc_auc}")
-print(f"Recall: {recall}")
-print(f"Precision: {precision}")
-print(f"Specificity: {specificity}")
-print(f"PR-AUC: {pr_auc}")
-print(f"MCC: {mcc}")
-print(confusion_matrix(y_test_specific.values[indexes_NCCN], y_pred_label))
-ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values[indexes_NCCN], y_pred_label)).plot()
-
-plot_confusion_matrix(confusion_matrix(y_test_specific.values[indexes_NCCN], y_pred_label))
-plt.savefig("plots/cm_treatment_failure_2_years_nccn_ipi.pdf", bbox_inches="tight")
-
 
 y_pred = bst.predict_proba(X_test_specific).astype(float)
 y_pred = [1 if x[1] > 0.2 else 0 for x in y_pred]
+
+y_test_specific = test_specific[outcomes[1]]
 
 f1 = f1_score(y_test_specific.values, y_pred)
 roc_auc = roc_auc_score(
@@ -393,27 +331,6 @@ pr_auc = average_precision_score(
 )
 mcc = matthews_corrcoef(y_test_specific.values, y_pred)
 
-y_test_specific = test_specific[outcome_column[-1]]
-
-## other outcomes
-
-y_test_specific = test_specific[outcome_column[3]]
-
-## 
-y_pred_proba = bst.predict_proba(X_test_specific)[:, 1]  # Get probabilities for class 1
-y_pred_label = (y_pred_proba >= 0.3).astype(int)  # Apply 0.5 threshold (or whatever you used)
-
-results = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label)
-
-for metric, stats in results.items():
-    print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
-
-
-
-f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-    X_test_specific, y_test_specific, bst, 0.3
-)
-
 print(f"F1: {f1}")
 print(f"ROC-AUC: {roc_auc}")
 print(f"Recall: {recall}")
@@ -421,10 +338,7 @@ print(f"Precision: {precision}")
 print(f"Specificity: {specificity}")
 print(f"PR-AUC: {pr_auc}")
 print(f"MCC: {mcc}")
-print(confusion_matrix(y_test_specific.values, y_pred_label))
-ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values, y_pred_label)).plot()
-
-
+print(confusion_matrix(y_test_specific.values, y_pred))
 
 import shap
 
@@ -443,6 +357,7 @@ print(f"NCCN IPI event rate in high-risk group: {nccn_event_rate:.3f}")
 print(f"Absolute risk difference: {absolute_risk_difference:.3f}")
 print(f"Estimated NNT (ML_All vs NCCN IPI): {nnt:.1f}")
 
+# COMORBIDITY AND AE
 
 feature_names = [
     "Performance status (diagnosis)",
@@ -455,7 +370,7 @@ feature_names = [
     "Sex",
     "Platelets (diagnosis)",
     "Count of prednisolone prescriptions (1095 dage)",
-    "Sum of days of hospitalization due to minor surgical procedures (365 days)",
+    "Count of days of hospitalization due to minor surgical procedures (365 days)",
     "Maximum of beta-2-microglubolin (1095 days)",
     "Maximum of neutrophilocytes (90 days)",
     "Age-adjusted IPI (diagnosis)",
@@ -501,12 +416,6 @@ feature_names_original = [
     "pred_sks_referals_Røntgenundersøgelse af thorax_within_0_to_365_days_count_fallback_-1",
     "pred_PERSIMUNE_microbiology_analysis_epstein_within_0_to_90_days_count_fallback_-1",
 ]
-[x for x in X_test_specific.columns if x not in feature_names_original][40:]
-
-CORE_LOOKUP_TABLES
-
-persimune_codes = load_data_from_table("CODES_NPU2PERSIMUNE")
-persimune_codes[persimune_codes["analysisgroup"] == "HAPTO"]
 
 new_renaming_dict = {
     "pred_RKKP_n_extranodal_regions_diagnosis_fallback_-1": "Count of extranodal regions (diagnosis)",
@@ -579,9 +488,9 @@ rename_dict = {
 
 rename_dict.update(new_renaming_dict)
 
-X_test_specific_renamed = X_test_specific.rename(columns=rename_dict)
+X_test_specific_renamed = X_test_specific[features_30].rename(columns=rename_dict)
 
-X_train_smtom_renamed = X_train_smtom.rename(columns=rename_dict)
+X_train_smtom_renamed = X_train_smtom[features_30].rename(columns=rename_dict)
 
 # Initialize an empty DataFrame to store correlations
 features = X_train_smtom_renamed.columns
@@ -596,36 +505,6 @@ for i in tqdm(features):
             )
         else:
             corr_matrix.loc[i, j] = np.nan
-
-# Flatten upper triangle
-corr_values = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)).stack()
-
-# Absolute correlations (optional)
-corr_values = corr_values.abs()
-
-bins = np.arange(0, 1.1, 0.1)  # 0.0–1.0
-bin_labels = [f"{bins[i]:.1f}-{bins[i+1]:.1f}" for i in range(len(bins)-1)]
-
-# For each variable, get correlations with others
-corr_counts = (
-    corr_matrix.abs()
-    .apply(lambda x: pd.cut(x, bins=bins, labels=bin_labels).value_counts())
-    .fillna(0)
-    .astype(int)
-    .T
-)
-
-plt.figure(figsize=(6,4))
-plt.hist(corr_values, bins=bins, color='#4A90E2', edgecolor='black', alpha=0.8)
-plt.xlabel('Absolute correlation between feature pairs', fontsize=11)
-plt.ylabel('Number of feature pairs', fontsize=11)
-#plt.title('Distribution of pairwise feature correlations', fontsize=12, pad=10)
-plt.grid(axis='y', linestyle='--', alpha=0.4)
-plt.tight_layout()
-plt.savefig("plots/feature_correlation_histogram.pdf", bbox_inches="tight")
-plt.show()
-
-
 # Plot heatmap
 
 corr_clean = corr_matrix.astype(float).copy()
@@ -655,21 +534,14 @@ figure = shap.summary_plot(
     # feature_names=feature_names,
     max_display=20,
     show=False,
-    alpha=0.4,
-    plot_type="layered_violin"
-    # plot_size=((10, 4)),
 )
 
 
-# plt.savefig("plots/shap_values_ipi_only_layered_violin.png", dpi=300, bbox_inches="tight")
-# plt.savefig("plots/shap_values_ipi_only_layered_violin.pdf", bbox_inches="tight")
+# plt.savefig("plots/shap_values_dlbcl_only.png", dpi=300, bbox_inches="tight")
+# plt.savefig("plots/shap_values_dlbcl_only.pdf", bbox_inches="tight")
 
-
-# plt.savefig("plots/shap_values_dlbcl_only_layered_violin.png", dpi=300, bbox_inches="tight")
-# plt.savefig("plots/shap_values_dlbcl_only_layered_violin.pdf", bbox_inches="tight")
-
-# plt.savefig("plots/shap_values_layered_violin.png", dpi=300, bbox_inches="tight")
-# plt.savefig("plots/shap_values_layered_violin.pdf", bbox_inches="tight")
+plt.savefig("plots/shap_values.png", dpi=300, bbox_inches="tight")
+plt.savefig("plots/shap_values.pdf", bbox_inches="tight")
 
 feature_names = list(X_test_specific_renamed.columns)
 vals = np.abs(shap_values.values).mean(0)
@@ -692,7 +564,6 @@ feature_importance_df["latex_string"] = feature_importance_df.apply(
 )
 
 feature_importance_df["latex_string"]
-
 
 feature_importance_df.to_csv("tables/feature_importance_df.csv", index=False, sep=";")
 
@@ -717,96 +588,8 @@ figure = shap.summary_plot(
     show=False,
 )
 
-
-
-plt.savefig("plots/shap_values.png", dpi=300, bbox_inches="tight")
-plt.savefig("plots/shap_values.pdf", bbox_inches="tight")
-plt.savefig("plots/shap_values.svg", bbox_inches="tight")
-
-
-
-# plt.savefig("plots/shap_values_dlbcl_only.png", dpi=300, bbox_inches="tight")
-# plt.savefig("plots/shap_values_dlbcl_only.pdf", bbox_inches="tight")
-
-
-
 bst.save_model("results/models/model_all.json")
 test_specific.to_csv("results/test_specific.csv", index=False)
 test.to_csv("results/test.csv", index=False)
 X_test_specific.to_csv("results/X_test_specific.csv", index=False)
 X_test.to_csv("results/X_test.csv", index=False)
-
-
-explainer = shap.TreeExplainer(bst)
-shap_train = explainer.shap_values(X_train_smtom_renamed)
-shap_val = explainer.shap_values(X_test_specific_renamed)
-
-# Mean absolute SHAP values per feature
-mean_shap_train = np.abs(shap_train).mean(axis=0)
-mean_shap_val = np.abs(shap_val).mean(axis=0)
-
-# Feature names
-feature_names = X_train_smtom_renamed.columns if hasattr(X_train_smtom_renamed, "columns") else [f"f{i}" for i in range(X_train_smtom_renamed.shape[1])]
-
-# Scatter plot
-plt.figure(figsize=(8, 8))
-plt.scatter(mean_shap_train, mean_shap_val, alpha=0.7)
-
-# Add diagonal (perfect agreement)
-lims = [
-    min(mean_shap_train.min(), mean_shap_val.min()),
-    max(mean_shap_train.max(), mean_shap_val.max())
-]
-plt.plot(lims, lims, "k--", alpha=0.8)
-
-# Labels
-plt.xlabel("Mean |SHAP| (Training set)")
-plt.ylabel("Mean |SHAP| (Test set)")
-#plt.title("Training vs Testset SHAP Feature Importance")
-
-offsets = [(5,5), (-5,5), (5,-5), (-5,-5), (10,0)]
-top_idx = np.argsort(mean_shap_val)[-10:]
-
-plt.savefig("plots/shap_train_test_scatter.png", dpi=300, bbox_inches="tight")
-plt.savefig("plots/shap_train_test_scatter.pdf", bbox_inches="tight")
-
-
-plt.show()
-
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# Pick top 20 features by validation SHAP
-top_idx = np.argsort(mean_shap_val)[-20:]
-df_bar = pd.DataFrame({
-    "Feature": np.array(feature_names)[top_idx],
-    "Train": mean_shap_train[top_idx],
-    "Test": mean_shap_val[top_idx]
-})
-
-# Sort by validation importance
-df_bar = df_bar.sort_values("Test", ascending=False)
-
-# Melt for seaborn
-df_melt = df_bar.melt(id_vars="Feature", var_name="Dataset", value_name="Mean |SHAP|")
-sns.set_style("whitegrid")
-
-# Plot
-plt.figure(figsize=(11, 6))
-sns.barplot(
-    data=df_melt,
-    x="Mean |SHAP|", y="Feature",
-    hue="Dataset", dodge=True
-)
-
-#plt.title("Top 20 Features by SHAP Importance")
-plt.xlabel("Mean |SHAP| Value")
-plt.ylabel("")
-plt.legend(title="Dataset")
-plt.tight_layout()
-
-plt.savefig("plots/shap_train_test_bar.png", dpi=300, bbox_inches="tight")
-plt.savefig("plots/shap_train_test_bar.pdf", bbox_inches="tight")
-
-plt.show()

@@ -3,7 +3,6 @@ import psycopg2.extras
 import pandas as pd
 from helpers.constants import OPTIONS_DICTIONARY
 
-
 def connect_to_db(options_dictionary: dict) -> psycopg2.connect:
     """Given a dictionary containing the configurations for the connenction,
     connect to the database

@@ -23,9 +23,16 @@ import seaborn as sns
 
 sns.set_context("paper")
 
+WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
+
+wrong_patientids = WIDE_DATA[WIDE_DATA["age_diagnosis"].isna()]["patientid"]
+
+
 seed = 46
 test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
 feature_matrix = pd.read_pickle("results/feature_matrix_all.pkl")
+feature_matrix = feature_matrix[~feature_matrix["patientid"].isin(wrong_patientids)].reset_index(drop = True)
+
 # feature_matrix = feature_matrix[feature_matrix["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop = True)
 features = pd.read_csv("results/feature_names_all.csv")["features"].values
 
@@ -60,7 +67,6 @@ train = feature_matrix[~feature_matrix["patientid"].isin(test_patientids)].reset
 )
 train_splitter = train.copy()
 
-WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
 WIDE_DATA["CNS_IPI_diagnosis"] = WIDE_DATA.apply(
     lambda x: calculate_CNS_IPI(
         x["age_diagnosis"],
@@ -201,7 +207,7 @@ for i, (train_index, test_index) in enumerate(
         X_test_specific,
         y_test_specific,
         test_specific,
-    ) = get_features_and_outcomes(train, test, WIDE_DATA, outcome, col_to_leave)
+    ) = get_features_and_outcomes(train, test, WIDE_DATA, outcome, features)
 
     bst = XGBClassifier(
         missing=-1,
@@ -220,14 +226,14 @@ for i, (train_index, test_index) in enumerate(
 
     bst.fit(X_train_smtom, y_train_smtom)
 
-    results, best_threshold = check_performance_across_thresholds(
-        X_test_specific, y_test_specific, bst
-    )
+    # results, best_threshold = check_performance_across_thresholds(
+    #     X_test_specific, y_test_specific, bst
+    # )
     f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-        X_test_specific, y_test_specific, bst, 0.3
+        X_test_specific, y_test_specific, bst, 0.5, y_pred_proba=[]
     )
     y_pred = bst.predict_proba(X_test_specific).astype(float)
-    y_pred = [1 if x[1] > tested_threshold else 0 for x in y_pred]
+    y_pred = [1 if x[1] > 0.5 else 0 for x in y_pred]
 
     cm = confusion_matrix(y_test_specific.values, y_pred)
 
@@ -260,14 +266,15 @@ results_dataframes = []
 results_stratified = []
 train_splitter = train.copy()
 features_original = features.copy()
+tested_threshold = 0.2
 for i, (train_index, test_index) in enumerate(
     skf.split(train_splitter[features], train_splitter["group"])
 ):
     train = train_splitter.iloc[train_index]
     test = train_splitter.iloc[test_index]
     features = features_original.copy()
-    # train = train[train["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
-    # test = test[test["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
+    #train = train[train["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
+    #test = test[test["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
 
     features = list(features)
 
@@ -280,6 +287,7 @@ for i, (train_index, test_index) in enumerate(
     for column in tqdm(features):
         clip_values(train, test, column)
 
+    features.extend(["pred_RKKP_subtype_fallback_-1", "pred_RKKP_hospital_fallback_-1", "pred_RKKP_sex_fallback_-1"])
     (
         X_train_smtom,
         y_train_smtom,
@@ -288,7 +296,7 @@ for i, (train_index, test_index) in enumerate(
         X_test_specific,
         y_test_specific,
         test_specific,
-    ) = get_features_and_outcomes(train, test, WIDE_DATA, outcome, col_to_leave)
+    ) = get_features_and_outcomes(train, test, WIDE_DATA, outcome, features)
 
     bst = XGBClassifier(
         missing=-1,
@@ -312,7 +320,7 @@ for i, (train_index, test_index) in enumerate(
     y_pred = [1 if x[1] > tested_threshold else 0 for x in y_pred]
 
     f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-        X_test_specific, y_test_specific, bst, 0.3
+        X_test_specific, y_test_specific, bst, tested_threshold
     )
 
     cm = confusion_matrix(y_test_specific.values, y_pred)
@@ -324,12 +332,12 @@ for i, (train_index, test_index) in enumerate(
     print(f"Specificity: {specificity}")
     print(f"PR-AUC: {pr_auc}")
     print(f"MCC: {mcc}")
-    print(f"Best Threshold: {best_threshold}")
+    print(f"Best Threshold: {tested_threshold}")
     print(cm)
 
     results_stratified.append(
         {
-            "threshold": best_threshold,
+            "threshold": tested_threshold,
             "f1": f1,
             "roc_auc": roc_auc,
             "recall": recall,
@@ -343,119 +351,6 @@ for i, (train_index, test_index) in enumerate(
     )
 
 
-results_dataframes = []
-results_stratified = []
-train_splitter = train.copy()
-features_original = features.copy()
-features_original = list(feature_matrix.columns)
-features_original = [x for x in features_original if x not in col_to_leave]
-supplemental_columns = [
-    "pred_RKKP_hospital_fallback_-1",
-    "pred_RKKP_subtype_fallback_-1",
-    "pred_RKKP_sex_fallback_-1",
-]
-features_original = [x for x in features_original if x not in supplemental_columns]
-for i in range(5):
-    features = features_original.copy()
-    train, test = train_test_split(
-        train_splitter, test_size=0.2, random_state=i, stratify=train_splitter["group"]
-    )
-
-    from tqdm import tqdm
-
-    for column in tqdm(features):
-        clip_values(train, test, column)
-
-    features = list(features)
-    features.extend(supplemental_columns)
-
-    X_train_smtom = train[[x for x in train.columns if x in features]]
-    y_train_smtom = train[outcome]
-    bst = XGBClassifier(
-        missing=-1,
-        n_estimators=3000,  # was 2000 before
-        learning_rate=0.01,
-        max_depth=8,
-        min_child_weight=3,
-        gamma=0,
-        subsample=1,
-        colsample_bytree=0.9,
-        objective="binary:logistic",
-        reg_alpha=10,
-        nthread=10,  # was 6 before-could bumpt this for faster fitting probably?
-        # scale_pos_weight=scale_pos_weight,
-        random_state=i,
-    )
-
-    bst.fit(X_train_smtom, y_train_smtom)
-
-    test_specific = test[test["pred_RKKP_subtype_fallback_-1"] == 0]
-
-    WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
-
-    test_specific = test_specific.merge(
-        WIDE_DATA[["patientid", "regime_1_chemo_type_1st_line"]]
-    )
-
-    test_specific = test_specific[
-        test_specific["regime_1_chemo_type_1st_line"].isin(included_treatments)
-    ].reset_index(drop=True)
-
-    test_specific = test_specific.drop(columns="regime_1_chemo_type_1st_line")
-
-    X_test_specific = test_specific[[x for x in test_specific.columns if x in features]]
-    y_test_specific = test_specific[outcome]
-
-    X_test = test[[x for x in test.columns if x in features]]
-    y_test = test[outcome]
-
-    results, best_threshold = check_performance_across_thresholds(
-        X_test_specific, y_test_specific, bst
-    )
-    tested_threshold = 0.5
-
-    results_dataframes.append(results)
-
-    y_pred = bst.predict_proba(X_test_specific).astype(float)
-    y_pred = [1 if x[1] > tested_threshold else 0 for x in y_pred]
-
-    f1 = f1_score(y_test_specific.values, y_pred)
-    roc_auc = roc_auc_score(
-        y_test_specific.values, bst.predict_proba(X_test_specific).astype(float)[:, 1]
-    )
-    recall = recall_score(y_test_specific.values, y_pred)
-    precision = precision_score(y_test_specific.values, y_pred, zero_division=1)
-    specificity = recall_score(y_test_specific.values, y_pred, pos_label=0)
-    pr_auc = average_precision_score(
-        y_test_specific.values, bst.predict_proba(X_test_specific).astype(float)[:, 1]
-    )
-    mcc = matthews_corrcoef(y_test_specific.values, y_pred)
-    cm = confusion_matrix(y_test_specific.values, y_pred)
-
-    print(f"F1: {f1}")
-    print(f"ROC-AUC: {roc_auc}")
-    print(f"Recall: {recall}")
-    print(f"Precision: {precision}")
-    print(f"Specificity: {specificity}")
-    print(f"PR-AUC: {pr_auc}")
-    print(f"MCC: {mcc}")
-    print(f"Best Threshold: {best_threshold}")
-    print(cm)
-
-    results_stratified.append(
-        {
-            "threshold": best_threshold,
-            "f1": f1,
-            "roc_auc": roc_auc,
-            "recall": recall,
-            "precision": precision,
-            "specificity": specificity,
-            "pr_auc": pr_auc,
-            "mcc": mcc,
-            "confusion_matrix": cm,
-            "seed": i,
-        }
-    )
 
 
 results_stratified_df = pd.DataFrame(results_stratified)

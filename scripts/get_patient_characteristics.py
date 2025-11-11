@@ -136,13 +136,16 @@ def get_table_from_data(filtered):
 
     return not_percent, percent
 
+# remove temporary IDs 
+WIDE_DATA = WIDE_DATA[WIDE_DATA["age_diagnosis"].notna()].reset_index(drop = True)
+
 
 test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
 
 filtered = WIDE_DATA[
-    ~(WIDE_DATA["subtype"] == "DLBCL")
-    & (WIDE_DATA["regime_1_chemo_type_1st_line"].isin(included_treatments))
-    & (WIDE_DATA["patientid"].isin(test_patientids))
+    (WIDE_DATA["subtype"] == "DLBCL")
+    & ~(WIDE_DATA["regime_1_chemo_type_1st_line"].isin(included_treatments))
+    & ~(WIDE_DATA["patientid"].isin(test_patientids))
 ]
 
 filtered = WIDE_DATA[
@@ -160,6 +163,9 @@ filtered = WIDE_DATA[~WIDE_DATA["patientid"].isin(test_patientids)]
 filtered = filtered[filtered["subtype"] == "DLBCL"]
 
 not_percent, percent = get_table_from_data(filtered)
+
+
+len(filtered)
 
 # they are under 70
 
@@ -239,6 +245,5 @@ def get_table_from_data_na(filtered):
     percent = {i: round((e / len(filtered)) * 100, 2) for i, e in not_percent.items()}
 
     return not_percent, percent
-
 
 get_table_from_data_na(filtered)
