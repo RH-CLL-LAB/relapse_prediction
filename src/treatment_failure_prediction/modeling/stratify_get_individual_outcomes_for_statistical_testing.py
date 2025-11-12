@@ -1,131 +1,100 @@
-from sklearn.model_selection import train_test_split
+import os
 import pandas as pd
 import numpy as np
-from sklearn.metrics import (
-    f1_score,
-    roc_auc_score,
-    precision_score,
-    recall_score,
-    auc,
-    average_precision_score,
-    matthews_corrcoef,
-    confusion_matrix,
-    classification_report,
-)
-
-from sklearn.calibration import calibration_curve, CalibrationDisplay
-from sklearn.metrics import brier_score_loss, log_loss
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import (
-    RocCurveDisplay,
-    PrecisionRecallDisplay,
-    ConfusionMatrixDisplay,
-    DetCurveDisplay,
-)
-import shap
-
-
 from tqdm import tqdm
-from imblearn.combine import SMOTETomek
 from xgboost import XGBClassifier
 
-import matplotlib.pyplot as plt
-import seaborn as sns
-
 from helpers.constants import *
-from helpers.processing_helper import *
-from helpers.sql_helper import *
+from helpers.processing_helper import clip_values
+# sql_helper imported in original but unused here
 
+import seaborn as sns
 sns.set_context("paper")
 
+# ---------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------
 seed = 46
-
 DLBCL_ONLY = False
+OUTPUT_DIR = "data/individual_outcomes"
 
+# ---------------------------------------------------------------------
+# IO / data prep
+# ---------------------------------------------------------------------
 WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
 
 test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
 feature_matrix = pd.read_pickle("results/feature_matrix_all.pkl")
 
+# Remove wrong patient ids (as in other scripts)
 wrong_patientids = WIDE_DATA[WIDE_DATA["age_diagnosis"].isna()]["patientid"]
-
-feature_matrix = feature_matrix[~feature_matrix["patientid"].isin(wrong_patientids)].reset_index(drop = True)
-
-feature_matrix.replace(-1, np.nan, inplace=True)
-
-features = pd.read_csv("results/feature_names_all.csv")["features"].values
-test = feature_matrix[feature_matrix["patientid"].isin(test_patientids)].reset_index(
-    drop=True
+feature_matrix = (
+    feature_matrix[~feature_matrix["patientid"].isin(wrong_patientids)]
+    .reset_index(drop=True)
 )
-train = feature_matrix[~feature_matrix["patientid"].isin(test_patientids)].reset_index(
-    drop=True
-)
+
+# Match other scripts: treat -1 as missing when modeling
+feature_matrix = feature_matrix.replace(-1, np.nan)
+
+# Split train / test on held-out patient ids
+test = feature_matrix[feature_matrix["patientid"].isin(test_patientids)].reset_index(drop=True)
+train = feature_matrix[~feature_matrix["patientid"].isin(test_patientids)].reset_index(drop=True)
 
 if DLBCL_ONLY:
     train = train[train["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
 
-outcome_column = [x for x in feature_matrix if "outc" in x]
-outcome = outcome_column[0]
-#outcome = outcome_column[3]
+# Identify outcome columns (all with "outc" in name)
+outcome_columns = [c for c in feature_matrix.columns if "outc" in c]
+
+# Exclude leakage and non-predictor columns from modeling
 col_to_leave = ["patientid", "timestamp", "pred_time_uuid", "group"]
-col_to_leave.extend(outcome_column)
+col_to_leave.extend(outcome_columns)
+col_to_leave.extend([c for c in feature_matrix.columns if "NCCN_" in c])
 
-ipi_cols = [x for x in feature_matrix.columns if "NCCN_" in x]
-col_to_leave.extend(ipi_cols)
+# Base features from file
+features = list(pd.read_csv("results/feature_names_all.csv")["features"].values)
 
-predictor_columns = [x for x in train.columns if x not in col_to_leave]
-
-predictor_columns = [
-    x
-    for x in predictor_columns
-    if x not in ["pred_RKKP_subtype_fallback_-1", "pred_RKKP_hospital_fallback_-1"]
-]
-
-features = list(features)
-
-for i in supplemental_columns:
-    if i not in features:
-        features.append(i)
-
-for column in tqdm(features):
-    clip_values(train, test, column)
-
+# Define supplemental columns (⚠️ must be defined BEFORE use)
 supplemental_columns = [
     "pred_RKKP_hospital_fallback_-1",
     "pred_RKKP_subtype_fallback_-1",
     "pred_RKKP_sex_fallback_-1",
 ]
 
-features = list(features)
-features.extend(supplemental_columns)
+# Ensure supplemental columns are included (without duplicates)
+for col in supplemental_columns:
+    if col not in features:
+        features.append(col)
 
-test_with_treatment = test.merge(
-    WIDE_DATA[["patientid", "regime_1_chemo_type_1st_line"]]
-)
+# Clip extreme values (train-driven) consistently across train/test
+for col in tqdm(features, desc="Clipping feature values"):
+    if col in train.columns:
+        clip_values(train, test, col)
 
-for outcome in outcome_column:
+# Ensure output directory exists
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    (
-        X_train_smtom,
-        y_train_smtom,
-        X_test,
-        y_test,
-        X_test_specific,
-        y_test_specific,
-        test_specific,
-    ) = get_features_and_outcomes(
-        train,
-        test,
-        WIDE_DATA,
-        outcome,
-        features,
+# ---------------------------------------------------------------------
+# Helper: build matrices per outcome using your original helper
+# ---------------------------------------------------------------------
+def get_features_and_outcomes_for_outcome(outcome_name: str):
+    from helpers.processing_helper import get_features_and_outcomes
+    return get_features_and_outcomes(
+        train=train,
+        test=test,
+        WIDE_DATA=WIDE_DATA,
+        outcome=outcome_name,
+        feature_list=features,
         specific_immunotherapy=False,
         none_chop_like=False,
-        only_DLBCL_filter=False
+        only_DLBCL_filter=False,
     )
 
-    bst = XGBClassifier(
-        # missing=-1,
+# ---------------------------------------------------------------------
+# Model template (kept identical to preserve behavior)
+# ---------------------------------------------------------------------
+def make_model(random_state: int):
+    return XGBClassifier(
         n_estimators=3000,
         learning_rate=0.01,
         max_depth=8,
@@ -135,23 +104,30 @@ for outcome in outcome_column:
         colsample_bytree=0.9,
         objective="binary:logistic",
         reg_alpha=10,
-        nthread=10,
-        random_state=seed,
+        nthread=10,           # keep for backward-compat; newer xgboost uses n_jobs
+        random_state=random_state,
     )
 
+# ---------------------------------------------------------------------
+# Train one model per outcome and save test probabilities
+# ---------------------------------------------------------------------
+for outcome in outcome_columns:
+    (
+        X_train_smtom,
+        y_train_smtom,
+        X_test,
+        y_test,
+        X_test_specific,
+        y_test_specific,
+        test_specific,
+    ) = get_features_and_outcomes_for_outcome(outcome)
 
-    NCCN_IPIS = [
-        "pred_RKKP_age_diagnosis_fallback_-1",
-        "pred_RKKP_LDH_diagnosis_fallback_-1",
-        "pred_RKKP_AA_stage_diagnosis_fallback_-1",
-        "pred_RKKP_extranodal_disease_diagnosis_fallback_-1",
-        "pred_RKKP_PS_diagnosis_fallback_-1",
-    ]
+    model = make_model(seed)
+    model.fit(X_train_smtom, y_train_smtom)
 
-    bst.fit(X_train_smtom, y_train_smtom)
+    # Positive-class probability
+    proba = model.predict_proba(X_test_specific).astype(float)[:, 1]
+    test_specific[f"ml_{outcome}"] = proba
 
-    y_pred = bst.predict_proba(X_test_specific).astype(float)
-
-    test_specific[f"ml_{outcome}"] = [x[1] for x in y_pred]
-
-    test_specific.to_csv(f"data/individual_outcomes/test_specific_ml_{outcome}.csv", index = False)
+    out_path = os.path.join(OUTPUT_DIR, f"test_specific_ml_{outcome}.csv")
+    test_specific.to_csv(out_path, index=False)

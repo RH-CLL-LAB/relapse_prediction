@@ -1,108 +1,105 @@
-from sklearn.model_selection import train_test_split
-import pandas as pd
+"""
+Train an XGBoost model (DLBCL-only training by default), evaluate on:
+  1) all test patients (X_test, y_test)
+  2) subtype-specific test set (X_test_specific, y_test_specific)
+
+Also computes:
+  - NCCN IPI comparators (scaled as probabilities and thresholded at 6)
+  - Bootstrap 95% CIs for key metrics
+  - Feature correlation visuals
+  - SHAP summary and bar plots
+  - Saves useful CSVs and model artifacts
+"""
+
+import os
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tqdm import tqdm
+from xgboost import XGBClassifier
 from sklearn.metrics import (
     f1_score,
     roc_auc_score,
     precision_score,
     recall_score,
-    auc,
     average_precision_score,
     matthews_corrcoef,
     confusion_matrix,
-    classification_report,
-)
-
-from sklearn.calibration import calibration_curve, CalibrationDisplay
-from sklearn.metrics import brier_score_loss, log_loss
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import (
-    RocCurveDisplay,
-    PrecisionRecallDisplay,
     ConfusionMatrixDisplay,
-    DetCurveDisplay,
+    precision_recall_curve,
+    roc_curve,
 )
-import shap
 
+# ---- helpers (fixed imports) ----
+from helpers.constants import supplemental_columns  # + colors if you need them elsewhere
+from helpers.processing_helper import (
+    get_features_and_outcomes,
+    clip_values,
+    plot_confusion_matrix,
+    check_performance,
+    check_performance_across_thresholds,
+)
 
-from tqdm import tqdm
-from imblearn.combine import SMOTETomek
-from xgboost import XGBClassifier
-
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-from helpers.constants import *
-from helpers.processing_helper import *
-from helpers.sql_helper import *
-
+# ---- viz defaults ----
 sns.set_context("paper")
+plt.rcParams.update({"mathtext.default": "regular"})
 
+# ---- params ----
 seed = 46
+DLBCL_ONLY = True  # train on DLBCL only
 
-DLBCL_ONLY = True
+# ---- I/O and dirs ----
+os.makedirs("plots", exist_ok=True)
+os.makedirs("results/models", exist_ok=True)
+os.makedirs("results", exist_ok=True)
+os.makedirs("tables", exist_ok=True)
+os.makedirs("data", exist_ok=True)
 
+# =============================================================================
+# 1) Load & prepare data
+# =============================================================================
 WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
-
-test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
 feature_matrix = pd.read_pickle("results/feature_matrix_all.pkl")
+test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
 
+# remove missing-age patients
 wrong_patientids = WIDE_DATA[WIDE_DATA["age_diagnosis"].isna()]["patientid"]
-
-feature_matrix = feature_matrix[~feature_matrix["patientid"].isin(wrong_patientids)].reset_index(drop = True)
-
+feature_matrix = (
+    feature_matrix[~feature_matrix["patientid"].isin(wrong_patientids)]
+    .reset_index(drop=True)
+)
+# replace sentinel -1 with NaN (robust for metrics/calibration, and corr will skip)
 feature_matrix.replace(-1, np.nan, inplace=True)
 
-features = pd.read_csv("results/feature_names_all.csv")["features"].values
-test = feature_matrix[feature_matrix["patientid"].isin(test_patientids)].reset_index(
-    drop=True
-)
-train = feature_matrix[~feature_matrix["patientid"].isin(test_patientids)].reset_index(
-    drop=True
-)
+# base features list
+features = pd.read_csv("results/feature_names_all.csv")["features"].tolist()
 
-if DLBCL_ONLY:
+# split
+test = feature_matrix[feature_matrix["patientid"].isin(test_patientids)].reset_index(drop=True)
+train = feature_matrix[~feature_matrix["patientid"].isin(test_patientids)].reset_index(drop=True)
+
+# if requested, train only on DLBCL (subtype code assumed == 0)
+if DLBCL_ONLY and "pred_RKKP_subtype_fallback_-1" in train.columns:
     train = train[train["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
 
-outcome_column = [x for x in feature_matrix if "outc" in x]
-outcome = outcome_column[0]
-#outcome = outcome_column[3]
-col_to_leave = ["patientid", "timestamp", "pred_time_uuid", "group"]
-col_to_leave.extend(outcome_column)
+# pick outcome
+outcome_columns = [c for c in feature_matrix.columns if "outc" in c]
+# default: the first one (consistent with your original script)
+outcome = outcome_columns[0]
 
-ipi_cols = [x for x in feature_matrix.columns if "NCCN_" in x]
-col_to_leave.extend(ipi_cols)
+# ensure supplemental columns are included
+for col in supplemental_columns:
+    if col not in features:
+        features.append(col)
 
-predictor_columns = [x for x in train.columns if x not in col_to_leave]
+# robustify via clipping
+for col in tqdm(features, desc="Clipping outliers"):
+    clip_values(train, test, col)
 
-predictor_columns = [
-    x
-    for x in predictor_columns
-    if x not in ["pred_RKKP_subtype_fallback_-1", "pred_RKKP_hospital_fallback_-1"]
-]
-
-features = list(features)
-
-for i in supplemental_columns:
-    if i not in features:
-        features.append(i)
-
-for column in tqdm(features):
-    clip_values(train, test, column)
-
-supplemental_columns = [
-    "pred_RKKP_hospital_fallback_-1",
-    "pred_RKKP_subtype_fallback_-1",
-    "pred_RKKP_sex_fallback_-1",
-]
-
-features = list(features)
-features.extend(supplemental_columns)
-
-test_with_treatment = test.merge(
-    WIDE_DATA[["patientid", "regime_1_chemo_type_1st_line"]]
-)
-
+# =============================================================================
+# 2) Build matrices via helper
+# =============================================================================
 (
     X_train_smtom,
     y_train_smtom,
@@ -112,18 +109,20 @@ test_with_treatment = test.merge(
     y_test_specific,
     test_specific,
 ) = get_features_and_outcomes(
-    train,
-    test,
-    WIDE_DATA,
-    outcome,
-    features,
+    train=train,
+    test=test,
+    WIDE_DATA=WIDE_DATA,
+    outcome=outcome,
+    features=features,
     specific_immunotherapy=False,
     none_chop_like=False,
-    only_DLBCL_filter=False
+    only_DLBCL_filter=False,  # already filtered above if DLBCL_ONLY
 )
 
+# =============================================================================
+# 3) Train model
+# =============================================================================
 bst = XGBClassifier(
-    # missing=-1,
     n_estimators=3000,
     learning_rate=0.01,
     max_depth=8,
@@ -136,503 +135,163 @@ bst = XGBClassifier(
     nthread=10,
     random_state=seed,
 )
-
-
-NCCN_IPIS = [
-    "pred_RKKP_age_diagnosis_fallback_-1",
-    "pred_RKKP_LDH_diagnosis_fallback_-1",
-    "pred_RKKP_AA_stage_diagnosis_fallback_-1",
-    "pred_RKKP_extranodal_disease_diagnosis_fallback_-1",
-    "pred_RKKP_PS_diagnosis_fallback_-1",
-]
-
 bst.fit(X_train_smtom, y_train_smtom)
 
-y_pred = bst.predict_proba(X_test_specific).astype(float)
+# save useful per-patient predictions for DLBCL model
+y_pred_proba_specific = bst.predict_proba(X_test_specific)[:, 1].astype(float)
+test_specific["ml_dlbcl_pred_proba"] = y_pred_proba_specific
+test_specific.to_csv("data/test_specific_ml_dlbcl.csv", index=False)
 
-test_specific["ml_dlbcl_pred_proba"] = [x[1] for x in y_pred]
-
-test_specific.to_csv("data/test_specific_ml_dlbcl.csv", index = False)
-
-y_pred_label = [1 if x[1] > 0.3 else 0 for x in y_pred]
-plot_confusion_matrix(confusion_matrix(y_test_specific.values, y_pred_label))
+# quick CM (DLBCL specific set) at 0.30, plus pretty plot
+y_pred_label_specific_03 = (y_pred_proba_specific > 0.30).astype(int)
+plot_confusion_matrix(confusion_matrix(y_test_specific.values, y_pred_label_specific_03))
 plt.savefig("plots/cm_treatment_failure_2_years_ml_all_0.3_no_chop.pdf", bbox_inches="tight")
 
-results, best_threshold = check_performance_across_thresholds(X_test, y_test, bst, y_pred_proba=[])
+# =============================================================================
+# 4) Metric sweeps + point estimates (helpers)
+# =============================================================================
+_ = check_performance_across_thresholds(X_test, y_test, bst, y_pred_proba=[])
+f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
+    X_test, y_test, bst, 0.5, y_pred_proba=[]
+)
+y_pred_test = (bst.predict_proba(X_test)[:, 1] > 0.5).astype(int)
+print(f"\n=== All test (thr=0.50) ===")
+print(f"F1: {f1:.3f} | ROC-AUC: {roc_auc:.3f} | PR-AUC: {pr_auc:.3f}")
+print(f"Recall: {recall:.3f} | Precision: {precision:.3f} | Specificity: {specificity:.3f} | MCC: {mcc:.3f}")
+print(confusion_matrix(y_test.values, y_pred_test))
+ConfusionMatrixDisplay(confusion_matrix(y_test.values, y_pred_test)).plot()
+
+_ = check_performance_across_thresholds(X_test_specific, y_test_specific, bst, y_pred_proba=[])
+# your script used 0.59 here — keep that choice
+y_pred_specific_059 = (y_pred_proba_specific > 0.59).astype(int)
+test_specific["model_highrisk"] = y_pred_specific_059
 
 f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-    X_test, y_test, bst, 0.5
+    X_test_specific, y_test_specific, bst, 0.59, y_pred_proba=[]
 )
-y_pred = bst.predict_proba(X_test).astype(float)
-y_pred = [1 if x[1] > 0.5 else 0 for x in y_pred]
+print(f"\n=== DLBCL-specific test (thr=0.59) ===")
+print(f"F1: {f1:.3f} | ROC-AUC: {roc_auc:.3f} | PR-AUC: {pr_auc:.3f}")
+print(f"Recall: {recall:.3f} | Precision: {precision:.3f} | Specificity: {specificity:.3f} | MCC: {mcc:.3f}")
+print(confusion_matrix(y_test_specific.values, y_pred_specific_059))
+ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values, y_pred_specific_059)).plot()
 
-print(f"F1: {f1}")
-print(f"ROC-AUC: {roc_auc}")
-print(f"Recall: {recall}")
-print(f"Precision: {precision}")
-print(f"Specificity: {specificity}")
-print(f"PR-AUC: {pr_auc}")
-print(f"MCC: {mcc}")
-print(confusion_matrix(y_test.values, y_pred))
-ConfusionMatrixDisplay(confusion_matrix(y_test.values, y_pred)).plot()
+# =============================================================================
+# 5) Bootstrap CIs (local helper)
+# =============================================================================
+def stratified_bootstrap_metrics(y_true, y_pred_proba, threshold, n_bootstraps=1000, seed=42):
+    rng = np.random.default_rng(seed)
+    y_true = np.asarray(y_true).astype(int)
+    y_pred_proba = np.asarray(y_pred_proba).astype(float)
 
-results, best_threshold = check_performance_across_thresholds(
-    X_test_specific, y_test_specific, bst, y_pred_proba=[]
-)
+    pos_idx = np.flatnonzero(y_true == 1)
+    neg_idx = np.flatnonzero(y_true == 0)
 
-y_pred = bst.predict_proba(X_test_specific).astype(float)
-y_pred = [1 if x[1] > 0.59 else 0 for x in y_pred]
-
-test_specific["model_highrisk"] = y_pred
-
-from sklearn.utils import resample
-
-def stratified_bootstrap_metrics(
-    y_true, y_pred_proba, y_pred_label, n_bootstraps=1000, seed=42, return_raw_values = False
-):
-    rng = np.random.RandomState(seed)
-    y_true = np.array(y_true)
-    y_pred_proba = np.array(y_pred_proba)
-    y_pred_label = np.array(y_pred_label)
-
-    positive_indices = np.where(y_true == 1)[0]
-    negative_indices = np.where(y_true == 0)[0]
-
-    roc_aucs, pr_aucs = [], []
-    precisions, specificities, recalls, mccs = [], [], [], []
-
-    for _ in tqdm(range(n_bootstraps)):
-        # Stratified resampling
-        pos_sample = rng.choice(positive_indices, size=len(positive_indices), replace=True)
-        neg_sample = rng.choice(negative_indices, size=len(negative_indices), replace=True)
-        sample_indices = np.concatenate([pos_sample, neg_sample])
-        rng.shuffle(sample_indices)
-
-        y_true_bs = y_true[sample_indices]
-        y_pred_proba_bs = y_pred_proba[sample_indices]
-        y_pred_label_bs = y_pred_label[sample_indices]
-
-        try:
-            roc_aucs.append(roc_auc_score(y_true_bs, y_pred_proba_bs))
-            pr_aucs.append(average_precision_score(y_true_bs, y_pred_proba_bs))
-            precisions.append(precision_score(y_true_bs, y_pred_label_bs, zero_division=0))
-            recalls.append(recall_score(y_true_bs, y_pred_label_bs, zero_division=0))
-            mccs.append(matthews_corrcoef(y_true_bs, y_pred_label_bs))
-        
-        # Specificity
-            cm = confusion_matrix(y_true_bs, y_pred_label_bs)
-            tn, fp, fn, tp = cm.ravel()
-            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-            specificities.append(specificity)
-
-        except:
-            continue
-
-    if return_raw_values:
-        return {"roc_auc": roc_aucs,
-        "pc_auc": pr_aucs,
-        "precision": precisions,
-        "recall": recalls,
-        "specificity": specificities,
-        "mcc": mccs}
-
-    def summary_stats(metric_list):
+    def summarize(x):
+        x = np.array(x, dtype=float)
         return {
-            "mean": np.mean(metric_list),
-            "ci_lower": np.percentile(metric_list, 2.5),
-            "ci_upper": np.percentile(metric_list, 97.5)
+            "mean": float(np.nanmean(x)),
+            "ci_lower": float(np.nanpercentile(x, 2.5)),
+            "ci_upper": float(np.nanpercentile(x, 97.5)),
         }
 
-    return {
-        "roc_auc": summary_stats(roc_aucs),
-        "pr_auc": summary_stats(pr_aucs),
-        "precision": summary_stats(precisions),
-        "recall": summary_stats(recalls),
-        "specificity": summary_stats(specificities),
-        "mcc": summary_stats(mccs),
-    }
+    out = {"roc_auc": [], "pr_auc": [], "precision": [], "recall": [], "specificity": [], "mcc": []}
 
-## 
-y_pred_proba = bst.predict_proba(X_test)[:, 1]  # Get probabilities for class 1
-y_pred_label = (y_pred_proba >= 0.3).astype(int)  # Apply 0.5 threshold (or whatever you used)
+    for _ in tqdm(range(n_bootstraps), desc="Bootstrapping"):
+        bs = np.concatenate([
+            rng.choice(pos_idx, size=len(pos_idx), replace=True),
+            rng.choice(neg_idx, size=len(neg_idx), replace=True),
+        ])
+        yb = y_true[bs]
+        pb = y_pred_proba[bs]
+        yp = (pb >= threshold).astype(int)
 
-results = stratified_bootstrap_metrics(y_test, y_pred_proba, y_pred_label)
+        cm = confusion_matrix(yb, yp, labels=[0, 1]).ravel()
+        tn, fp, fn, tp = cm if cm.size == 4 else (0, 0, 0, 0)
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else np.nan
 
-for metric, stats in results.items():
-    print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
+        try:
+            out["roc_auc"].append(roc_auc_score(yb, pb))
+            out["pr_auc"].append(average_precision_score(yb, pb))
+            out["precision"].append(precision_score(yb, yp, zero_division=0))
+            out["recall"].append(recall_score(yb, yp, zero_division=0))
+            out["specificity"].append(specificity)
+            out["mcc"].append(matthews_corrcoef(yb, yp))
+        except Exception:
+            continue
 
+    return {k: summarize(v) for k, v in out.items()}
 
-f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-    X_test, y_test, bst, 0.3
-)
+# All-test bootstrap (thr=0.30 here to mirror the earlier section; adjust if needed)
+proba_all = bst.predict_proba(X_test)[:, 1]
+thr_all = 0.30
+ci_all = stratified_bootstrap_metrics(y_test, proba_all, thr_all)
+print("\n=== All test bootstrap (thr=0.30) ===")
+for k, s in ci_all.items():
+    print(f"{k:12s}: {s['mean']:.3f} (95% CI: {s['ci_lower']:.3f}–{s['ci_upper']:.3f})")
 
-print(f"F1: {f1}")
-print(f"ROC-AUC: {roc_auc}")
-print(f"Recall: {recall}")
-print(f"Precision: {precision}")
-print(f"Specificity: {specificity}")
-print(f"PR-AUC: {pr_auc}")
-print(f"MCC: {mcc}")
-print(confusion_matrix(y_test.values, y_pred_label))
-ConfusionMatrixDisplay(confusion_matrix(y_test.values, y_pred_label)).plot()
+# DLBCL-specific bootstrap (thr=0.50 as in your script’s later section)
+proba_spec = y_pred_proba_specific
+thr_spec = 0.50
+ci_spec = stratified_bootstrap_metrics(y_test_specific, proba_spec, thr_spec)
+print("\n=== DLBCL-specific bootstrap (thr=0.50) ===")
+for k, s in ci_spec.items():
+    print(f"{k:12s}: {s['mean']:.3f} (95% CI: {s['ci_lower']:.3f}–{s['ci_upper']:.3f})")
 
+# =============================================================================
+# 6) NCCN IPI comparators (scaled probabilities and label at >=6)
+# =============================================================================
+nccn_raw = test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"].copy()
+nccn_scaled = (nccn_raw / 9).astype(float)  # keep NaN where missing
+test_specific["nccn_ipi_pred_proba"] = nccn_scaled
+test_specific.to_csv("data/test_specific_nccn_ipi.csv", index=False)
 
-## 
-y_pred_proba = bst.predict_proba(X_test_specific)[:, 1]  # Get probabilities for class 1
-y_pred_label = (y_pred_proba >= 0.5).astype(int)  # Apply 0.5 threshold (or whatever you used)
+# evaluate where NCCN is present
+idx_nccn = nccn_scaled.notna().to_numpy().nonzero()[0]
+y_true_nccn = y_test_specific.iloc[idx_nccn].values
+proba_nccn = nccn_scaled.iloc[idx_nccn].values
+label_nccn = (nccn_raw.iloc[idx_nccn].values >= 6).astype(int)
 
-results = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label)
+ci_nccn = stratified_bootstrap_metrics(y_true_nccn, proba_nccn, threshold=0.5)  # threshold only used for discrete metrics
+print("\n=== NCCN IPI (where available) ===")
+for k, s in ci_nccn.items():
+    print(f"{k:12s}: {s['mean']:.3f} (95% CI: {s['ci_lower']:.3f}–{s['ci_upper']:.3f})")
 
-for metric, stats in results.items():
-    print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
-
-
-
-f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-    X_test_specific, y_test_specific, bst, 0.5
-)
-
-print(f"F1: {f1}")
-print(f"ROC-AUC: {roc_auc}")
-print(f"Recall: {recall}")
-print(f"Precision: {precision}")
-print(f"Specificity: {specificity}")
-print(f"PR-AUC: {pr_auc}")
-print(f"MCC: {mcc}")
-print(confusion_matrix(y_test_specific.values, y_pred_label))
-ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values, y_pred_label)).plot()
-
-test_specific["y_pred"] = y_pred_label
-
-outcomes = [x for x in test_specific.columns if "outc" in x]
-
-test_specific["outc_succesful_treatment_label_within_0_to_1825_days_max_fallback_0"] = (
-    test_specific[outcomes[1]] + test_specific[outcomes[3]]
-).apply(lambda x: min(x, 1))
-
-# test_specific = test_specific.merge(
-#     WIDE_DATA[["patientid", "CNS_IPI_diagnosis"]]
-# ).reset_index(drop=True)
-
-
-y_pred = [
-    1 if x >= 6 else 0
-    for x in test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"]
-]
-
-test_specific["NCCN_highrisk"] = y_pred
-
-# y_pred = [
-#     0 if (pd.isnull(x)) or x < 4 else 1 for x in test_specific["CNS_IPI_diagnosis"]
-# ]
-
-from sklearn.metrics import precision_recall_curve, roc_curve
-
-weird_probabilities_NCCN = (
-    test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"] / 9
-).values
-test_specific["nccn_ipi_pred_proba"] = weird_probabilities_NCCN
-test_specific.to_csv("data/test_specific_nccn_ipi.csv", index = False)
-
-weird_probabilities_NCCN = [
-    (i, x) for i, x in enumerate(weird_probabilities_NCCN) if pd.notnull(x)
-]
-indexes_NCCN = [x[0] for x in weird_probabilities_NCCN]
-weird_probabilities_NCCN = [x[1] for x in weird_probabilities_NCCN]
-
-y_pred_label = [
-    1 if x >= 6 else 0
-    for x in test_specific.iloc[indexes_NCCN]["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"]
-]
-
-y_test_nccn = y_test_specific.iloc[indexes_NCCN]
-
-## 
-results = stratified_bootstrap_metrics(y_test_nccn, weird_probabilities_NCCN, y_pred_label)
-
-for metric, stats in results.items():
-    print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
-
-
-pr_auc = average_precision_score(y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN)
-roc_auc = roc_auc_score(y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN)
-f1 = f1_score(y_test_specific.values[indexes_NCCN], y_pred_label)
-
-recall = recall_score(y_test_specific.values[indexes_NCCN], y_pred_label)
-specificity = recall_score(y_test_specific.values[indexes_NCCN], y_pred_label, pos_label=0)
-precision = precision_score(y_test_specific.values[indexes_NCCN], y_pred_label)
-mcc = matthews_corrcoef(y_test_specific.values[indexes_NCCN], y_pred_label)
-print(f"F1: {f1}")
-print(f"ROC-AUC: {roc_auc}")
-print(f"Recall: {recall}")
-print(f"Precision: {precision}")
-print(f"Specificity: {specificity}")
-print(f"PR-AUC: {pr_auc}")
-print(f"MCC: {mcc}")
-print(confusion_matrix(y_test_specific.values[indexes_NCCN], y_pred_label))
-ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values[indexes_NCCN], y_pred_label)).plot()
-
-plot_confusion_matrix(confusion_matrix(y_test_specific.values[indexes_NCCN], y_pred_label))
+print("\nNCCN point metrics:")
+print(f"PR-AUC: {average_precision_score(y_true_nccn, proba_nccn):.3f}")
+print(f"ROC-AUC: {roc_auc_score(y_true_nccn, proba_nccn):.3f}")
+print(f"F1:     {f1_score(y_true_nccn, label_nccn):d}.{int(round((f1_score(y_true_nccn, label_nccn)%1)*1000)):03d}")
+print(confusion_matrix(y_true_nccn, label_nccn))
+ConfusionMatrixDisplay(confusion_matrix(y_true_nccn, label_nccn)).plot()
+plot_confusion_matrix(confusion_matrix(y_true_nccn, label_nccn))
 plt.savefig("plots/cm_treatment_failure_2_years_nccn_ipi.pdf", bbox_inches="tight")
 
+# =============================================================================
+# 7) Additional outcome variants (optional — keep minimal example)
+# =============================================================================
+# Example: use a different outcome if you need (kept from previous script)
+# y_test_alt = test_specific[outcome_columns[3]]
 
-y_pred = bst.predict_proba(X_test_specific).astype(float)
-y_pred = [1 if x[1] > 0.2 else 0 for x in y_pred]
-
-f1 = f1_score(y_test_specific.values, y_pred)
-roc_auc = roc_auc_score(
-    y_test_specific.values,
-    bst.predict_proba(X_test_specific).astype(float)[:, 1],
-)
-recall = recall_score(y_test_specific.values, y_pred)
-specificity = recall_score(y_test_specific.values, y_pred, pos_label=0)
-precision = precision_score(y_test_specific.values, y_pred)
-pr_auc = average_precision_score(
-    y_test_specific.values,
-    bst.predict_proba(X_test_specific).astype(float)[:, 1],
-)
-mcc = matthews_corrcoef(y_test_specific.values, y_pred)
-
-y_test_specific = test_specific[outcome_column[-1]]
-
-## other outcomes
-
-y_test_specific = test_specific[outcome_column[3]]
-
-## 
-y_pred_proba = bst.predict_proba(X_test_specific)[:, 1]  # Get probabilities for class 1
-y_pred_label = (y_pred_proba >= 0.3).astype(int)  # Apply 0.5 threshold (or whatever you used)
-
-results = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label)
-
-for metric, stats in results.items():
-    print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
-
-
-
-f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
-    X_test_specific, y_test_specific, bst, 0.3
-)
-
-print(f"F1: {f1}")
-print(f"ROC-AUC: {roc_auc}")
-print(f"Recall: {recall}")
-print(f"Precision: {precision}")
-print(f"Specificity: {specificity}")
-print(f"PR-AUC: {pr_auc}")
-print(f"MCC: {mcc}")
-print(confusion_matrix(y_test_specific.values, y_pred_label))
-ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values, y_pred_label)).plot()
-
-
-
-import shap
-
-# Filter to high-risk groups
-ml_all_highrisk = test_specific[test_specific["model_highrisk"] == 1]
-nccn_highrisk = test_specific[test_specific["NCCN_highrisk"] == 1]
-# Compute event rates
-ml_all_event_rate = ml_all_highrisk[outcome].mean()
-nccn_event_rate = nccn_highrisk[outcome].mean()
-# Compute absolute risk difference and NNT
-absolute_risk_difference = ml_all_event_rate - nccn_event_rate
-nnt = 1 / absolute_risk_difference if absolute_risk_difference != 0 else float("inf")
-# Output results
-print(f"ML_All event rate in high-risk group: {ml_all_event_rate:.3f}")
-print(f"NCCN IPI event rate in high-risk group: {nccn_event_rate:.3f}")
-print(f"Absolute risk difference: {absolute_risk_difference:.3f}")
-print(f"Estimated NNT (ML_All vs NCCN IPI): {nnt:.1f}")
-
-
-feature_names = [
-    "Performance status (diagnosis)",
-    "Age (diagnosis)",
-    "LDH (diagnosis)",
-    "Count of CT-scans of cerebrum (90 days)",
-    "Count of MR-scans of cerebrum (365 days)",
-    "Count of treatments with blood or blood products (1095 days)",
-    "Count of treatments with relation to blood, hematopoietic organs lymphatic tissue (90 days)",
-    "Sex",
-    "Platelets (diagnosis)",
-    "Count of prednisolone prescriptions (1095 dage)",
-    "Sum of days of hospitalization due to minor surgical procedures (365 days)",
-    "Maximum of beta-2-microglubolin (1095 days)",
-    "Maximum of neutrophilocytes (90 days)",
-    "Age-adjusted IPI (diagnosis)",
-    "Number of regions with leukemia (diagnosis)",
-    "Count of normal cell findings from pathology (1095 days)",
-    "Count of hospitalizations categorized as outpatient (90 days)",
-    "Count of hospitalizations categorized as written communication (365 days)",
-    "Count of hospitalizations categorized as treatment or care (90 days)",
-    "Count of sulfonamides prescriptions (1095 days)",
-    "Year of Treatment",
-    "Hospital",
-    "Count of Pathology tests resulting in unusable results (1095 days)",
-    "Unique count of prescriptions (ATC-level = 5) since diagnosis (90 days)",
-    "Count of X-ray scans of the thorax (365 days)",
-    "Count of Epstein Virus microbiology findings (90 days)",
-]
-
-feature_names_original = [
-    "pred_RKKP_PS_diagnosis_fallback_-1",
-    "pred_RKKP_age_diagnosis_fallback_-1",
-    "pred_RKKP_LDH_diagnosis_fallback_-1",
-    "pred_sks_referals_CT-skanning af cerebrum_within_0_to_90_days_count_fallback_-1",
-    "pred_sks_referals_MR-skanning af cerebrum_within_0_to_365_days_count_fallback_-1",
-    "pred_sks_at_the_hospital_Behandling med blod og blodprodukter_within_0_to_1825_days_count_fallback_-1",
-    "pred_sks_referals_Med beh m relation t blod_comma_ bloddan. organer og lymfatisk væv_within_0_to_90_days_count_fallback_-1",
-    "pred_RKKP_sex_fallback_-1",
-    "pred_RKKP_TRC_diagnosis_fallback_-1",
-    "pred_ordered_medicine_prednisolone_within_0_to_1825_days_count_fallback_-1",
-    "pred_sks_at_the_hospital_Mindre kirurgiske procedurer_within_0_to_365_days_sum_fallback_-1",
-    "pred_labmeasurements_B2M_within_0_to_1825_days_max_fallback_-1",
-    "pred_labmeasurements_NEU_within_0_to_90_days_max_fallback_-1",
-    "pred_RKKP_AAIPI_score_diagnosis_fallback_-1",
-    "pred_RKKP_n_regions_diagnosis_fallback_-1",
-    "pred_pathology_concat_normal_cells_within_0_to_1825_days_count_fallback_-1",
-    "pred_sks_at_the_hospital_Ambulant_within_0_to_90_days_count_fallback_-1",
-    "pred_sks_at_the_hospital_Skriftlig kommunikation_within_0_to_365_days_count_fallback_-1",
-    "pred_sks_at_the_hospital_Behandlings- og plejeklassifikation_within_0_to_90_days_count_fallback_-1",
-    "pred_ordered_medicine_sulfonamides_comma_ plain_within_0_to_1825_days_count_fallback_-1",
-    "pred_RKKP_year_treat_fallback_-1",
-    "pred_RKKP_hospital_fallback_-1",
-    "pred_pathology_concat_unusable_within_0_to_1825_days_count_fallback_-1",
-    "pred_ord_medicine_poly_pharmacy_since_diagnosis_atc_level_5_within_0_to_90_days_count_fallback_-1",
-    "pred_sks_referals_Røntgenundersøgelse af thorax_within_0_to_365_days_count_fallback_-1",
-    "pred_PERSIMUNE_microbiology_analysis_epstein_within_0_to_90_days_count_fallback_-1",
-]
-[x for x in X_test_specific.columns if x not in feature_names_original][40:]
-
-CORE_LOOKUP_TABLES
-
-persimune_codes = load_data_from_table("CODES_NPU2PERSIMUNE")
-persimune_codes[persimune_codes["analysisgroup"] == "HAPTO"]
-
-new_renaming_dict = {
-    "pred_RKKP_n_extranodal_regions_diagnosis_fallback_-1": "Count of extranodal regions (diagnosis)",
-    "pred_RKKP_tumor_diameter_diagnosis_fallback_-1": "Tumor diameter (diagnosis)",
-    "pred_RKKP_extranodal_disease_diagnosis_fallback_-1": "Extranodal disease (diagnosis)",
-    "pred_RKKP_subtype_fallback_-1": "Lymphoma subtype (diagnosis)",
-    "pred_RKKP_AA_stage_diagnosis_fallback_-1": "Ann Arbor Stage (diagnosis)",
-    "pred_RKKP_HB_diagnosis_fallback_-1": "Hemoglobin (diagnosis)",
-    "pred_RKKP_ALB_diagnosis_fallback_-1": "Albumin (diagnosis)",
-    "pred_RKKP_IgM_uM_diagnosis_fallback_-1": "Immunoglobulin M (diagnosis)",
-    "pred_labmeasurements_ALT_within_0_to_1825_days_count_fallback_-1": "Count of alanine transaminase tests (1095 days)",
-    "pred_labmeasurements_LEUK_within_0_to_90_days_min_fallback_-1": "Minimum of leukocytes (90 days)",
-    "pred_labmeasurements_LEUK_within_0_to_90_days_latest_fallback_-1": "Latest value of leukocytes (90 days)",
-    "pred_labmeasurements_NEU_within_0_to_90_days_latest_fallback_-1": "Latest value of neutrophils (90 days)",
-    "pred_labmeasurements_IGM_within_0_to_1825_days_min_fallback_-1": "Minimum of immunoglobulin M (1095 days)",
-    "pred_labmeasurements_GLUC_within_0_to_90_days_min_fallback_-1": "Minimum of blood glucose (90 days)",
-    "pred_labmeasurements_KOL_within_0_to_1825_days_max_fallback_-1": "Maximum of cholesterol (1095 days)",
-    "pred_labmeasurements_LDL_within_0_to_1825_days_count_fallback_-1": "Count of low-density lipoprotein tests (1095 days)",
-    "pred_labmeasurements_HAPTO_within_0_to_90_days_count_fallback_-1": "Count of haptoglobin tests (90 days)",
-    "pred_pathology_concat_bone_marrow_within_0_to_90_days_count_fallback_-1": "Count of pathology codes referring to bone marrow (90 days)",
-    "pred_pathology_concat_no_problem_cells_within_0_to_365_days_count_fallback_-1": "Count of pathology codes referring to no problem cells (365 days)",
-    "pred_pathology_concat_no_problem_cells_within_0_to_1825_days_count_fallback_-1": "Count of pathology codes referring to no problem cells (1095 days)",
-    "pred_pathology_concat_text_specification_within_0_to_90_days_count_fallback_-1": "Count of pathology codes with text specification (90 days)",
-    "pred_ord_medicine_poly_pharmacy_atc_level_4_within_0_to_90_days_count_fallback_-1": "Unique count of level 4 ATC codes from prescription medicine (90 days)",
-    "pred_ord_medicine_poly_pharmacy_atc_level_4_within_0_to_365_days_count_fallback_-1": "Unique count of level 4 ATC codes from prescription medicine (365 days)",
-    "pred_diagnoses_all_comorbidity_all_within_0_to_1825_days_count_fallback_-1": "Unique count of diagnosis codes (1095 days)",
-    "pred_sks_referals_Radiologiske procedurer_within_0_to_1825_days_count_fallback_-1": "Count of referals for radiological procedures (1095 days)",
-    "pred_sks_referals_CT-skanning af abdomen_within_0_to_365_days_count_fallback_-1": "Count of referals for CT scans of abdomen (365 days)",
-    "pred_sks_referals_Endoskopier genn. naturlige og kunstige legemsåbninger_within_0_to_365_days_count_fallback_-1": "Count of referals for endoscopy (365 days)",
-    "pred_sks_referals_Klinisk kontrol_within_0_to_90_days_count_fallback_-1": "Count of referals for clinical control (90 days)",
-    "pred_sks_referals_Kroppen_within_0_to_90_days_sum_fallback_-1": "Sum of days of referals regarding the body (90 days)",
-    "pred_sks_referals_Op. på perifere kar og lymfesystem_within_0_to_90_days_sum_fallback_-1": "Sum of days of referals for surgical procedures on peripheral and lymphatic vessels (90 days)",
-    "pred_sks_referals_Skriftlig kommunikation_within_0_to_365_days_count_fallback_-1": "Count of referals for written communication (365 days)",
-    "pred_sks_referals_Klinisk undersøgelse_within_0_to_90_days_count_fallback_-1": "Count of referals for clinical examination (90 days)",
-    "pred_sks_referals_Brysthule_comma_ lunger og respiration_within_0_to_365_days_count_fallback_-1": "Count of referals regarding chest cavity, lungs, or respiration (365 days)",
-    "pred_sks_referals_Op. på fordøjelsesorganer og milt_within_0_to_1825_days_sum_fallback_-1": "Sum of days of referals for surgical procedures on digestive organs and spleen (1095 days)",
-    "pred_sks_referals_Mammografi_comma_ screening_within_0_to_1825_days_count_fallback_-1": "Count of referals for mammography screening (1095 days)",
-    "pred_sks_referals_Mammografi_comma_ screening_within_0_to_1825_days_sum_fallback_-1": "Sum of days of referals for mammography screening (1095 days)",
-    "pred_sks_referals_Otoskopi_within_0_to_365_days_sum_fallback_-1": "Sum of days of referals for otoscopy (365 days)",
-    "pred_sks_referals_Observation af patient efter undersøgelse/behandling_within_0_to_90_days_count_fallback_-1": "Count of referals for observation of patient after examination or treatment (90 days)",
-    "pred_sks_referals_unique_niveau9_tekst_within_0_to_90_days_count_fallback_-1": "Unique count of referals (90 days)",
-    "pred_sks_at_the_hospital_Basis cytostatisk behandling_within_0_to_365_days_count_fallback_-1": "Count of basic cytostatic treatment (365 days)",
-    "pred_sks_at_the_hospital_Ultralyd-undersøgelser af abdomen_within_0_to_1825_days_count_fallback_-1": "Count of ultra-sound examinations of the abdomen (1095 days)",
-    "pred_sks_at_the_hospital_Perifere kredsløb og lymfesystem_within_0_to_1825_days_count_fallback_-1": "Count of examinations regarding peripheral and lymphatic vessels (1095 days)",
-    "pred_sks_at_the_hospital_Generelle pædagogiske interventioner_within_0_to_1825_days_count_fallback_-1": "Count of general pedagogical interventions (1095 days)",
-    "pred_sks_at_the_hospital_Entero- og koloskopier_within_0_to_90_days_sum_fallback_-1": "Sum of days in hospital for enteroscopies and colonoscopies (90 days)",
-    "pred_sks_at_the_hospital_Iltbehandling_within_0_to_365_days_count_fallback_-1": "Count of oxygen treatments (365 days)",
-    "pred_SDS_pato_Knoglemarv_within_0_to_90_days_count_fallback_-1": "Count of bone marrow pathologies (90 days)",
-    "pred_ordered_medicine_musculo-skeletal system_within_0_to_90_days_count_fallback_-1": "Count of ordered medicine regarding the musculo-skeletal system (90 days)",
-    "pred_ordered_medicine_other analgesics and antipyretics_within_0_to_1825_days_count_fallback_-1": "Count of orders for other analgesics and antipyretics (1095 days)",
-    "pred_ordered_medicine_paracetamol_within_0_to_1825_days_count_fallback_-1": "Count of paracetamol orders (1095 days)",
-    "pred_ordered_medicine_diuretics_within_0_to_365_days_count_fallback_-1": "Count of diuretics orders (365 days)",
-    "pred_ordered_medicine_lipid modifying agents_within_0_to_1825_days_count_fallback_-1": "Count of orders for lipid modifying agents (1095 days)",
-    "pred_ordered_medicine_genito urinary system and sex hormones_within_0_to_1825_days_count_fallback_-1": "Count of orders for sex hormones and genito urinary system (1095 days)",
-    "pred_ordered_medicine_mineral supplements_within_0_to_365_days_count_fallback_-1": "Count of orders for mineral supplements (365 days)",
-    "pred_ordered_medicine_dicloxacillin_within_0_to_1825_days_count_fallback_-1": "Count of orders for dicloxacillin (1095 days)",
-    "pred_ordered_medicine_angiotensin ii antagonists_comma_ plain_within_0_to_365_days_count_fallback_-1": "Count of orders for plain angiotensin II antagonists (365 days)",
-    "pred_ordered_medicine_lansoprazole_within_0_to_1825_days_count_fallback_-1": "Count of orders for lansoprazole (1095 days)",
-    "pred_PERSIMUNE_leukocytes_all_within_0_to_365_days_max_fallback_-1": "Max leukocyte count across all blood tests (365 days)",
-    "pred_PERSIMUNE_microbiology_culture_rare_within_0_to_90_days_count_fallback_-1": "Count of rare microbiology cultures (90 days)",
-    "pred_diagnoses_all_rare_within_0_to_365_days_count_fallback_-1": "Count of rare diagnoses (365 days)",
-    "pred_diagnoses_all_Kontakt mhp radiologisk undersøgelse_within_0_to_1825_days_count_fallback_-1": "Count of contacts in preparation for radiological examinations (1095 days)",
-    "pred_diagnoses_all_Diffust storcellet B-celle lymfom_within_0_to_90_days_count_fallback_-1": "Count of Diffuse Large B-Cell Lymphoma diagnoses (90 days)",
-}
-
-
-rename_dict = {
-    feature_names_original[i]: feature_names[i] for i in range(len(feature_names))
-}
-
-rename_dict.update(new_renaming_dict)
-
-X_test_specific_renamed = X_test_specific.rename(columns=rename_dict)
-
-X_train_smtom_renamed = X_train_smtom.rename(columns=rename_dict)
-
-# Initialize an empty DataFrame to store correlations
-features = X_train_smtom_renamed.columns
-corr_matrix = pd.DataFrame(index=features, columns=features, dtype=float)
-# Compute pairwise correlations excluding -1 values
-for i in tqdm(features):
-    for j in features:
-        valid_mask = (X_train_smtom_renamed[i] != -1) & (X_train_smtom_renamed[j] != -1)
-        if valid_mask.sum() > 1:  # Need at least 2 points
-            corr_matrix.loc[i, j] = X_train_smtom_renamed.loc[valid_mask, i].corr(
-                X_train_smtom_renamed.loc[valid_mask, j]
-            )
-        else:
-            corr_matrix.loc[i, j] = np.nan
-
-# Flatten upper triangle
-corr_values = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)).stack()
-
-# Absolute correlations (optional)
-corr_values = corr_values.abs()
-
-bins = np.arange(0, 1.1, 0.1)  # 0.0–1.0
-bin_labels = [f"{bins[i]:.1f}-{bins[i+1]:.1f}" for i in range(len(bins)-1)]
-
-# For each variable, get correlations with others
-corr_counts = (
-    corr_matrix.abs()
-    .apply(lambda x: pd.cut(x, bins=bins, labels=bin_labels).value_counts())
-    .fillna(0)
-    .astype(int)
-    .T
-)
-
-plt.figure(figsize=(6,4))
-plt.hist(corr_values, bins=bins, color='#4A90E2', edgecolor='black', alpha=0.8)
-plt.xlabel('Absolute correlation between feature pairs', fontsize=11)
-plt.ylabel('Number of feature pairs', fontsize=11)
-#plt.title('Distribution of pairwise feature correlations', fontsize=12, pad=10)
-plt.grid(axis='y', linestyle='--', alpha=0.4)
+# =============================================================================
+# 8) Feature correlations (train set, pairwise-complete)
+# =============================================================================
+X_train_renamed = X_train_smtom.copy()  # already numeric; NaNs allowed
+corr = X_train_renamed.corr(method="pearson", min_periods=2)
+# histogram of absolute pairwise corr
+upper = corr.where(np.triu(np.ones(corr.shape), 1).astype(bool)).abs().stack()
+bins = np.arange(0, 1.1, 0.1)
+plt.figure(figsize=(6, 4))
+plt.hist(upper, bins=bins, edgecolor="black", alpha=0.8)
+plt.xlabel("Absolute correlation between feature pairs")
+plt.ylabel("Number of feature pairs")
+plt.grid(axis="y", linestyle="--", alpha=0.4)
 plt.tight_layout()
 plt.savefig("plots/feature_correlation_histogram.pdf", bbox_inches="tight")
-plt.show()
+plt.close()
 
-
-# Plot heatmap
-
-corr_clean = corr_matrix.astype(float).copy()
-corr_clean = corr_clean.replace([np.inf, -np.inf], np.nan).fillna(0)
-plt.figure(figsize=(18, 14))
+# clustered heatmap
+corr_clean = corr.replace([np.inf, -np.inf], np.nan).fillna(0)
 sns.clustermap(
-    corr_clean.astype(float),
+    corr_clean,
     cmap="vlag",
     center=0,
     linewidths=0.5,
@@ -641,172 +300,78 @@ sns.clustermap(
     yticklabels=True,
     cbar_pos=(1.02, 0.4, 0.02, 0.4),
 )
-plt.title("Correlation Coefficient")
 plt.savefig("plots/feature_correlation_heatmap.pdf", bbox_inches="tight")
-plt.show()
+plt.close()
 
-# compute SHAP values
+# =============================================================================
+# 9) SHAP (summary + bar + stability vs train)
+# =============================================================================
+import shap  # import only where needed to speed import
 explainer = shap.TreeExplainer(bst)
-shap_values = explainer(X_test_specific_renamed)
 
-figure = shap.summary_plot(
-    shap_values,
-    X_test_specific_renamed,
-    # feature_names=feature_names,
-    max_display=20,
-    show=False,
-    alpha=0.4,
-    plot_type="layered_violin"
-    # plot_size=((10, 4)),
-)
+# For readability in figs, optionally rename columns (if you have a mapping)
+X_test_shap = X_test_specific.copy()
 
-
-# plt.savefig("plots/shap_values_ipi_only_layered_violin.png", dpi=300, bbox_inches="tight")
-# plt.savefig("plots/shap_values_ipi_only_layered_violin.pdf", bbox_inches="tight")
-
-
-# plt.savefig("plots/shap_values_dlbcl_only_layered_violin.png", dpi=300, bbox_inches="tight")
-# plt.savefig("plots/shap_values_dlbcl_only_layered_violin.pdf", bbox_inches="tight")
-
-# plt.savefig("plots/shap_values_layered_violin.png", dpi=300, bbox_inches="tight")
-# plt.savefig("plots/shap_values_layered_violin.pdf", bbox_inches="tight")
-
-feature_names = list(X_test_specific_renamed.columns)
-vals = np.abs(shap_values.values).mean(0)
-
-feature_importance = pd.DataFrame(
-    list(zip(feature_names, vals)), columns=["col_name", "feature_importance_vals"]
-)
-feature_importance.sort_values(
-    by=["feature_importance_vals"], ascending=False, inplace=True
-)
-
-feature_importance_df = feature_importance.reset_index(drop=True)
-
-feature_importance_df["feature_importance_vals_rounded"] = feature_importance_df[
-    "feature_importance_vals"
-].round(2)
-
-feature_importance_df["latex_string"] = feature_importance_df.apply(
-    lambda x: f"{x['col_name']} & {x['feature_importance_vals_rounded']:.2f} \\", axis=1
-)
-
-feature_importance_df["latex_string"]
-
-
-feature_importance_df.to_csv("tables/feature_importance_df.csv", index=False, sep=";")
-
-
-figure = shap.plots.bar(
-    shap_values,
-    # X_test_specific_renamed,
-    # feature_names=feature_names,
-    max_display=len(X_test_specific_renamed.columns),
-    show=False,
-)
-
-# compute SHAP values
-explainer = shap.TreeExplainer(bst)
-shap_values = explainer(X_test_specific_renamed)
-
-figure = shap.summary_plot(
-    shap_values,
-    X_test_specific_renamed,
-    # feature_names=feature_names,
-    max_display=20,
-    show=False,
-)
-
-
-
+# summary plot
+shap_values = explainer(X_test_shap)
+fig = shap.summary_plot(shap_values, X_test_shap, max_display=20, show=False)
 plt.savefig("plots/shap_values.png", dpi=300, bbox_inches="tight")
 plt.savefig("plots/shap_values.pdf", bbox_inches="tight")
 plt.savefig("plots/shap_values.svg", bbox_inches="tight")
+plt.close()
 
+# bar plot (global importance)
+fig = shap.plots.bar(shap_values, max_display=min(50, X_test_shap.shape[1]), show=False)
+plt.savefig("plots/shap_values_bar.png", dpi=300, bbox_inches="tight")
+plt.savefig("plots/shap_values_bar.pdf", bbox_inches="tight")
+plt.close()
 
+# train vs test mean|SHAP|
+shap_train = explainer.shap_values(X_train_smtom)
+shap_test = explainer.shap_values(X_test_shap)
+mean_train = np.abs(shap_train).mean(axis=0)
+mean_test = np.abs(shap_test).mean(axis=0)
 
-# plt.savefig("plots/shap_values_dlbcl_only.png", dpi=300, bbox_inches="tight")
-# plt.savefig("plots/shap_values_dlbcl_only.pdf", bbox_inches="tight")
+plt.figure(figsize=(8, 8))
+plt.scatter(mean_train, mean_test, alpha=0.7)
+lims = [min(mean_train.min(), mean_test.min()), max(mean_train.max(), mean_test.max())]
+plt.plot(lims, lims, "k--", alpha=0.8)
+plt.xlabel("Mean |SHAP| (Training set)")
+plt.ylabel("Mean |SHAP| (Test set)")
+plt.tight_layout()
+plt.savefig("plots/shap_train_test_scatter.png", dpi=300, bbox_inches="tight")
+plt.savefig("plots/shap_train_test_scatter.pdf", bbox_inches="tight")
+plt.close()
 
+# top 20 features by test SHAP
+top_idx = np.argsort(mean_test)[-20:]
+feat_names = (
+    list(X_train_smtom.columns)
+    if hasattr(X_train_smtom, "columns")
+    else [f"f{i}" for i in range(X_train_smtom.shape[1])]
+)
+df_bar = pd.DataFrame(
+    {"Feature": np.array(feat_names)[top_idx], "Train": mean_train[top_idx], "Test": mean_test[top_idx]}
+).sort_values("Test", ascending=False)
+df_melt = df_bar.melt(id_vars="Feature", var_name="Dataset", value_name="Mean |SHAP|")
+sns.set_style("whitegrid")
+plt.figure(figsize=(11, 6))
+sns.barplot(data=df_melt, x="Mean |SHAP|", y="Feature", hue="Dataset", dodge=True)
+plt.xlabel("Mean |SHAP| Value")
+plt.ylabel("")
+plt.legend(title="Dataset")
+plt.tight_layout()
+plt.savefig("plots/shap_train_test_bar.png", dpi=300, bbox_inches="tight")
+plt.savefig("plots/shap_train_test_bar.pdf", bbox_inches="tight")
+plt.close()
 
-
+# =============================================================================
+# 10) Save artifacts
+# =============================================================================
 bst.save_model("results/models/model_all.json")
 test_specific.to_csv("results/test_specific.csv", index=False)
 test.to_csv("results/test.csv", index=False)
 X_test_specific.to_csv("results/X_test_specific.csv", index=False)
 X_test.to_csv("results/X_test.csv", index=False)
 
-
-explainer = shap.TreeExplainer(bst)
-shap_train = explainer.shap_values(X_train_smtom_renamed)
-shap_val = explainer.shap_values(X_test_specific_renamed)
-
-# Mean absolute SHAP values per feature
-mean_shap_train = np.abs(shap_train).mean(axis=0)
-mean_shap_val = np.abs(shap_val).mean(axis=0)
-
-# Feature names
-feature_names = X_train_smtom_renamed.columns if hasattr(X_train_smtom_renamed, "columns") else [f"f{i}" for i in range(X_train_smtom_renamed.shape[1])]
-
-# Scatter plot
-plt.figure(figsize=(8, 8))
-plt.scatter(mean_shap_train, mean_shap_val, alpha=0.7)
-
-# Add diagonal (perfect agreement)
-lims = [
-    min(mean_shap_train.min(), mean_shap_val.min()),
-    max(mean_shap_train.max(), mean_shap_val.max())
-]
-plt.plot(lims, lims, "k--", alpha=0.8)
-
-# Labels
-plt.xlabel("Mean |SHAP| (Training set)")
-plt.ylabel("Mean |SHAP| (Test set)")
-#plt.title("Training vs Testset SHAP Feature Importance")
-
-offsets = [(5,5), (-5,5), (5,-5), (-5,-5), (10,0)]
-top_idx = np.argsort(mean_shap_val)[-10:]
-
-plt.savefig("plots/shap_train_test_scatter.png", dpi=300, bbox_inches="tight")
-plt.savefig("plots/shap_train_test_scatter.pdf", bbox_inches="tight")
-
-
-plt.show()
-
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# Pick top 20 features by validation SHAP
-top_idx = np.argsort(mean_shap_val)[-20:]
-df_bar = pd.DataFrame({
-    "Feature": np.array(feature_names)[top_idx],
-    "Train": mean_shap_train[top_idx],
-    "Test": mean_shap_val[top_idx]
-})
-
-# Sort by validation importance
-df_bar = df_bar.sort_values("Test", ascending=False)
-
-# Melt for seaborn
-df_melt = df_bar.melt(id_vars="Feature", var_name="Dataset", value_name="Mean |SHAP|")
-sns.set_style("whitegrid")
-
-# Plot
-plt.figure(figsize=(11, 6))
-sns.barplot(
-    data=df_melt,
-    x="Mean |SHAP|", y="Feature",
-    hue="Dataset", dodge=True
-)
-
-#plt.title("Top 20 Features by SHAP Importance")
-plt.xlabel("Mean |SHAP| Value")
-plt.ylabel("")
-plt.legend(title="Dataset")
-plt.tight_layout()
-
-plt.savefig("plots/shap_train_test_bar.png", dpi=300, bbox_inches="tight")
-plt.savefig("plots/shap_train_test_bar.pdf", bbox_inches="tight")
-
-plt.show()
+print("\n✅ stratify.py complete. Plots saved to /plots and data to /results & /data.\n")
