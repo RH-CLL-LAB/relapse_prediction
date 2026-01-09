@@ -991,7 +991,7 @@ feature_names = [
     "Maximum of beta-2-microglubolin (1095 days)",
     "Maximum of neutrophilocytes (90 days)",
     "Age-adjusted IPI (diagnosis)",
-    "Number of involved nodal sites (diagnosis)",
+    "Number of nodal regions (diagnosis)",
     "Count of normal cell findings from pathology (1095 days)",
     "Count of hospitalizations categorized as outpatient (90 days)",
     "Count of hospitalizations categorized as written communication (365 days)",
