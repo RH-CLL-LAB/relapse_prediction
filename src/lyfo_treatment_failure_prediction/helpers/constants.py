@@ -1,7 +1,5 @@
-# database connections
 import json
 
-# Read data from file:
 with open(
     "/ngc/people/mikwer_r/db_access.json", "r"
 ) as f:  # CHANGE HERE FOR RELEVANT FILE PATH

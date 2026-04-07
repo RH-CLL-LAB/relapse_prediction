@@ -1,10 +1,3 @@
-"""
-processing_helper.py — Helper functions for model evaluation,
-feature engineering, and clinical index calculation.
-
-All logic is identical to the original version.
-"""
-
 import pandas as pd
 import numpy as np
 import math
@@ -27,10 +20,6 @@ import matplotlib.pyplot as plt
 from lyfo_treatment_failure_prediction.helpers.constants import *  # noqa: F403
 
 
-# ---------------------------------------------------------------------------
-# Value clipping utilities
-# ---------------------------------------------------------------------------
-
 def clip_values(train: pd.DataFrame, test: pd.DataFrame, column: str):
     """
     Clip outliers in a given column based on the 1st and 99th quantiles
@@ -49,10 +38,6 @@ def clip_values(train: pd.DataFrame, test: pd.DataFrame, column: str):
         lower=lower_limit, upper=upper_limit
     )
 
-
-# ---------------------------------------------------------------------------
-# Performance evaluation utilities
-# ---------------------------------------------------------------------------
 
 def check_performance(X, y, model, threshold=0.5, y_pred_proba=[]):
     """
@@ -114,10 +99,6 @@ def check_performance_across_thresholds(X, y, model, y_pred_proba=[]):
     return results_melted, best_threshold
 
 
-# ---------------------------------------------------------------------------
-# Clinical scoring functions
-# ---------------------------------------------------------------------------
-
 def calculate_NCCN_IPI(age, ldh, aa_stage, extranodal, ps):
     """Compute NCCN-IPI score."""
     if any(map(math.isnan, [age, ldh, aa_stage, ps])):
@@ -171,10 +152,6 @@ def calculate_CNS_IPI(age, ldh, aa_stage, extranodal, ps, kidneys_diagnosis):
 
     return total_score
 
-
-# ---------------------------------------------------------------------------
-# Feature and outcome handling
-# ---------------------------------------------------------------------------
 
 def get_features_and_outcomes(
     train,
@@ -238,10 +215,6 @@ def get_features_and_outcomes(
         test_specific,
     )
 
-
-# ---------------------------------------------------------------------------
-# Visualization helpers
-# ---------------------------------------------------------------------------
 
 def plot_confusion_matrix(cm, tick_labels=["Treatment Success", "Treatment Failure"]):
     """Plot a row-normalized confusion matrix with annotations."""

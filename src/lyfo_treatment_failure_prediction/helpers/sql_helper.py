@@ -1,13 +1,3 @@
-"""
-sql_helper.py — helpers for connecting to the Postgres DB and loading tables.
-
-NOTE:
-- Behaviour is kept identical to the original version.
-- Global variables IMPORT_PUBLIC, LAB_PUBLIC, CORE_PUBLIC, etc. are still
-  initialised at import time by querying the database, and OPTIONS_DICTIONARY
-  is still mutated in-place in the same order.
-"""
-
 import psycopg2
 import psycopg2.extras
 import pandas as pd
@@ -116,12 +106,8 @@ def connect_and_query(
     return output
 
 
-# ---------------------------------------------------------------------------
-# Global initialization — identical behaviour to original
-# ---------------------------------------------------------------------------
-
-# Start with OPTIONS_DICTIONARY as imported from constants
-# and progressively mutate it as in the original script.
+# Table lists are built at import time by querying each schema.
+# OPTIONS_DICTIONARY is mutated in-place to switch between schemas.
 
 IMPORT_PUBLIC = sorted(
     [
@@ -233,9 +219,6 @@ CORE_LOOKUP_TABLES = sorted(
 dictionary_of_dictionaries["CORE_LOOKUP_TABLES"] = OPTIONS_DICTIONARY.copy()
 
 
-# ---------------------------------------------------------------------------
-# Cohort helpers
-# ---------------------------------------------------------------------------
 
 def get_cohort_string_from_data(data: pd.DataFrame, id_col: str = "patientid") -> str:
     """Helper function for creating string to limit loading to only include cohort.
@@ -256,8 +239,6 @@ def get_cohort_string_from_data_as_strings(
     """Helper function for creating string to limit loading to only include cohort
     (with ids as strings).
 
-    NOTE: This keeps the original, slightly odd formatting exactly as-is.
-
     Args:
         data (pd.DataFrame): dataframe containing the ids of interest.
         id_col (str, optional): Name of id-column. Defaults to "patientid".
@@ -268,9 +249,6 @@ def get_cohort_string_from_data_as_strings(
     return f'("{"", "".join(data[id_col].astype(str).values)}"")'
 
 
-# ---------------------------------------------------------------------------
-# Data loading helpers
-# ---------------------------------------------------------------------------
 
 def load_data_from_table(
     table_name: str,

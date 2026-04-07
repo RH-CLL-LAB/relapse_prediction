@@ -1,40 +1,35 @@
-from sklearn.model_selection import train_test_split
+import shap
+
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.calibration import CalibrationDisplay
 from sklearn.metrics import (
     f1_score,
     roc_auc_score,
     precision_score,
     recall_score,
-    auc,
     average_precision_score,
     matthews_corrcoef,
     confusion_matrix,
-    classification_report,
-)
-
-from sklearn.calibration import calibration_curve, CalibrationDisplay
-from sklearn.metrics import brier_score_loss, log_loss
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import (
+    precision_recall_curve,
+    roc_curve,
     RocCurveDisplay,
     PrecisionRecallDisplay,
     ConfusionMatrixDisplay,
-    DetCurveDisplay,
 )
-import shap
-
-
 from tqdm import tqdm
-from imblearn.combine import SMOTETomek
 from xgboost import XGBClassifier
 
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-from helpers.constants import *
-from helpers.processing_helper import *
-from helpers.sql_helper import *
+from helpers.constants import supplemental_columns
+from helpers.processing_helper import (
+    clip_values,
+    check_performance,
+    check_performance_across_thresholds,
+    get_features_and_outcomes,
+)
 
 sns.set_context("paper")
 
@@ -67,7 +62,6 @@ if DLBCL_ONLY:
 
 outcome_column = [x for x in feature_matrix if "outc" in x]
 outcome = outcome_column[-1]
-# outcome = outcome_column[0]
 col_to_leave = ["patientid", "timestamp", "pred_time_uuid", "group"]
 col_to_leave.extend(outcome_column)
 
@@ -91,14 +85,14 @@ for i in supplemental_columns:
 for column in tqdm(features):
     clip_values(train, test, column)
 
-supplemental_columns = [
+extra_features = [
     "pred_RKKP_hospital_fallback_-1",
     "pred_RKKP_subtype_fallback_-1",
     "pred_RKKP_sex_fallback_-1",
 ]
 
 features = list(features)
-features.extend(supplemental_columns)
+features.extend(extra_features)
 
 test_with_treatment = test.merge(
     WIDE_DATA[["patientid", "regime_1_chemo_type_1st_line"]]
@@ -123,7 +117,6 @@ test_with_treatment = test.merge(
 )
 
 bst = XGBClassifier(
-    # missing=-1,
     n_estimators=3000,
     learning_rate=0.01,
     max_depth=8,
@@ -176,8 +169,6 @@ y_pred = [1 if x[1] > 0.5 else 0 for x in y_pred]
 
 test_specific["model_highrisk"] = y_pred
 
-from sklearn.utils import resample
-
 def stratified_bootstrap_metrics(
     y_true, y_pred_proba, y_pred_label, n_bootstraps=1000, seed=42, return_raw_values = False
 ):
@@ -209,13 +200,10 @@ def stratified_bootstrap_metrics(
             precisions.append(precision_score(y_true_bs, y_pred_label_bs, zero_division=0))
             recalls.append(recall_score(y_true_bs, y_pred_label_bs, zero_division=0))
             mccs.append(matthews_corrcoef(y_true_bs, y_pred_label_bs))
-        
-        # Specificity
             cm = confusion_matrix(y_true_bs, y_pred_label_bs)
             tn, fp, fn, tp = cm.ravel()
             specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
             specificities.append(specificity)
-
         except:
             continue
 
@@ -243,18 +231,16 @@ def stratified_bootstrap_metrics(
         "mcc": summary_stats(mccs),
     }
 
-## 
-y_pred_proba = bst.predict_proba(X_test)[:, 1]  # Get probabilities for class 1
-y_pred_label = (y_pred_proba >= 0.3).astype(int)  # Apply 0.5 threshold (or whatever you used)
+y_pred_proba = bst.predict_proba(X_test)[:, 1]
+y_pred_label = (y_pred_proba >= 0.3).astype(int)
 
 results = stratified_bootstrap_metrics(y_test, y_pred_proba, y_pred_label)
 
 for metric, stats in results.items():
     print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
 
-## 
-y_pred_proba = bst.predict_proba(X_test_specific)[:, 1]  # Get probabilities for class 1
-y_pred_label = (y_pred_proba >= 0.5).astype(int)  # Apply 0.5 threshold (or whatever you used)
+y_pred_proba = bst.predict_proba(X_test_specific)[:, 1]
+y_pred_label = (y_pred_proba >= 0.5).astype(int)
 
 with_all_patients = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label, return_raw_values=True)
 without_all_patients = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label, return_raw_values=True)
@@ -290,26 +276,19 @@ ax = sns.boxplot(
     y="Metric",
     x="value",
     hue = "Training Data",
-
     width=0.6,
     fliersize=2,
     linewidth=1.2
 )
 
-# Prettify
 ax.set_xlabel("Performance metric value", fontsize=13)
 ax.set_ylabel("")
-# ax.set_title("Model performance with vs without temporary IDs", fontsize=14, weight="bold")
 ax.tick_params(axis='x', labelsize=11)
 ax.tick_params(axis='y', labelsize=11)
 
-# Legend
 ax.legend(
     title="Training Data",
-    #fontsize=11,
-    #title_fontsize=12,
     loc="lower right",
-    #frameon=True,
     edgecolor="black"
 )
 
@@ -317,7 +296,6 @@ plt.tight_layout()
 plt.show()
 
 
-# If ticks were disabled globally earlier, turn them back on:
 plt.rcParams.update({
     "xtick.bottom": True, "xtick.labelbottom": True,
     "ytick.left": True,   "ytick.labelleft": True
@@ -326,37 +304,26 @@ plt.rcParams.update({
 plt.figure(figsize=(8,6))
 ax = sns.boxplot(
     data=plotting_data,
-    x="Metric",          # categories now on x-axis
-    y="value",           # values on y-axis
+    x="Metric",
+    y="value",
     hue="Training Data",
     palette=["#1f77b4", "#ff7f0e"],
     width=0.6,
-    fliersize=2,         # hide outliers (optional)
+    fliersize=2,
     linewidth=1.2
 )
 
 ax.set_ylabel("Performance metric value", fontsize=13)
 ax.set_xlabel("", fontsize=13)
 
-# Tick settings
-#ax.set_xticks(np.arange(len(plotting_data["Metric"].unique())))  # categorical ticks
-#ax.set_xticklabels(plotting_data["Metric"].unique(), rotation=20, fontsize=11)
-
-#ax.set_yticks(np.arange(0.2, 1.05, 0.1))  # fixed ticks on y-axis
-#ax.tick_params(axis='y', labelsize=11)
-
-ax.tick_params(axis='x', labelsize=11, rotation=20)  # tilt labels a bit
+ax.tick_params(axis='x', labelsize=11, rotation=20)
 ax.tick_params(axis='y', labelsize=12)
 
 ax.yaxis.grid(True, linestyle="--", alpha=0.7)
 
-# Legend above
 ax.legend(
     title="Training Data",
     loc="lower left",
-    #bbox_to_anchor=(1, 0.5),
-    #ncol=2,
-    #frameon=False
 )
 
 plt.tight_layout()
@@ -403,11 +370,6 @@ test_specific["outc_succesful_treatment_label_within_0_to_1825_days_max_fallback
     test_specific[outcomes[1]] + test_specific[outcomes[3]]
 ).apply(lambda x: min(x, 1))
 
-# test_specific = test_specific.merge(
-#     WIDE_DATA[["patientid", "CNS_IPI_diagnosis"]]
-# ).reset_index(drop=True)
-
-
 y_pred = [
     1 if x >= 6 else 0
     for x in test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"]
@@ -415,11 +377,7 @@ y_pred = [
 
 test_specific["NCCN_highrisk"] = y_pred
 
-# y_pred = [
-#     0 if (pd.isnull(x)) or x < 4 else 1 for x in test_specific["CNS_IPI_diagnosis"]
-# ]
 
-from sklearn.metrics import precision_recall_curve, roc_curve
 
 weird_probabilities_NCCN = (
     test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"] / 9
@@ -437,7 +395,6 @@ y_pred_label = [
 
 y_test_nccn = y_test_specific.iloc[indexes_NCCN]
 
-## 
 results = stratified_bootstrap_metrics(y_test_nccn, weird_probabilities_NCCN, y_pred_label)
 
 for metric, stats in results.items():
@@ -477,18 +434,12 @@ print(f"PR-AUC: {pr_auc}")
 print(f"MCC: {mcc}")
 print(confusion_matrix(y_test_specific.values, y_pred))
 
-import shap
-
-# Filter to high-risk groups
 ml_all_highrisk = test_specific[test_specific["model_highrisk"] == 1]
 nccn_highrisk = test_specific[test_specific["NCCN_highrisk"] == 1]
-# Compute event rates
 ml_all_event_rate = ml_all_highrisk[outcome].mean()
 nccn_event_rate = nccn_highrisk[outcome].mean()
-# Compute absolute risk difference and NNT
 absolute_risk_difference = ml_all_event_rate - nccn_event_rate
 nnt = 1 / absolute_risk_difference if absolute_risk_difference != 0 else float("inf")
-# Output results
 print(f"ML_All event rate in high-risk group: {ml_all_event_rate:.3f}")
 print(f"NCCN IPI event rate in high-risk group: {nccn_event_rate:.3f}")
 print(f"Absolute risk difference: {absolute_risk_difference:.3f}")
@@ -510,7 +461,7 @@ feature_names = [
     "Maximum of beta-2-microglubolin (1095 days)",
     "Maximum of neutrophilocytes (90 days)",
     "Age-adjusted IPI (diagnosis)",
-    "Number of nodal regions (diagnosis)",
+    "Count of nodal regions (diagnosis)",
     "Count of normal cell findings from pathology (1095 days)",
     "Count of hospitalizations categorized as outpatient (90 days)",
     "Count of hospitalizations categorized as written communication (365 days)",
@@ -552,12 +503,6 @@ feature_names_original = [
     "pred_sks_referals_Røntgenundersøgelse af thorax_within_0_to_365_days_count_fallback_-1",
     "pred_PERSIMUNE_microbiology_analysis_epstein_within_0_to_90_days_count_fallback_-1",
 ]
-[x for x in X_test_specific.columns if x not in feature_names_original][40:]
-
-CORE_LOOKUP_TABLES
-
-persimune_codes = load_data_from_table("CODES_NPU2PERSIMUNE")
-persimune_codes[persimune_codes["analysisgroup"] == "HAPTO"]
 
 new_renaming_dict = {
     "pred_RKKP_n_extranodal_regions_diagnosis_fallback_-1": "Count of extranodal regions (diagnosis)",
@@ -634,10 +579,9 @@ X_test_specific_renamed = X_test_specific.rename(columns=rename_dict)
 
 X_train_smtom_renamed = X_train_smtom.rename(columns=rename_dict)
 
-# Initialize an empty DataFrame to store correlations
+# Pairwise correlations excluding -1 (missing value sentinel)
 features = X_train_smtom_renamed.columns
 corr_matrix = pd.DataFrame(index=features, columns=features, dtype=float)
-# Compute pairwise correlations excluding -1 values
 for i in tqdm(features):
     for j in features:
         valid_mask = (X_train_smtom_renamed[i] != -1) & (X_train_smtom_renamed[j] != -1)
@@ -647,7 +591,6 @@ for i in tqdm(features):
             )
         else:
             corr_matrix.loc[i, j] = np.nan
-# Plot heatmap
 
 corr_clean = corr_matrix.astype(float).copy()
 corr_clean = corr_clean.replace([np.inf, -np.inf], np.nan).fillna(0)
@@ -673,24 +616,11 @@ shap_values = explainer(X_test_specific_renamed)
 figure = shap.summary_plot(
     shap_values,
     X_test_specific_renamed,
-    # feature_names=feature_names,
     max_display=20,
     show=False,
     alpha=0.4,
-    plot_type="layered_violin"
-    # plot_size=((10, 4)),
+    plot_type="layered_violin",
 )
-
-
-# plt.savefig("plots/shap_values_ipi_only_layered_violin.png", dpi=300, bbox_inches="tight")
-# plt.savefig("plots/shap_values_ipi_only_layered_violin.pdf", bbox_inches="tight")
-
-
-# plt.savefig("plots/shap_values_dlbcl_only_layered_violin.png", dpi=300, bbox_inches="tight")
-# plt.savefig("plots/shap_values_dlbcl_only_layered_violin.pdf", bbox_inches="tight")
-
-# plt.savefig("plots/shap_values_layered_violin.png", dpi=300, bbox_inches="tight")
-# plt.savefig("plots/shap_values_layered_violin.pdf", bbox_inches="tight")
 
 feature_names = list(X_test_specific_renamed.columns)
 vals = np.abs(shap_values.values).mean(0)
@@ -712,27 +642,21 @@ feature_importance_df["latex_string"] = feature_importance_df.apply(
     lambda x: f"{x['col_name']} & {x['feature_importance_vals_rounded']:.2f} \\", axis=1
 )
 
-feature_importance_df["latex_string"]
-
 feature_importance_df.to_csv("tables/feature_importance_df.csv", index=False, sep=";")
 
 
 figure = shap.plots.bar(
     shap_values,
-    # X_test_specific_renamed,
-    # feature_names=feature_names,
     max_display=len(X_test_specific_renamed.columns),
     show=False,
 )
 
-# compute SHAP values
 explainer = shap.TreeExplainer(bst)
 shap_values = explainer(X_test_specific_renamed)
 
 figure = shap.summary_plot(
     shap_values,
     X_test_specific_renamed,
-    # feature_names=feature_names,
     max_display=20,
     show=False,
 )
@@ -748,25 +672,21 @@ explainer = shap.TreeExplainer(bst)
 shap_train = explainer.shap_values(X_train_smtom_renamed)
 shap_val = explainer.shap_values(X_test_specific_renamed)
 
-# Mean absolute SHAP values per feature
 mean_shap_train = np.abs(shap_train).mean(axis=0)
 mean_shap_val = np.abs(shap_val).mean(axis=0)
 
-# Feature names
 feature_names = X_train_smtom_renamed.columns if hasattr(X_train_smtom_renamed, "columns") else [f"f{i}" for i in range(X_train_smtom_renamed.shape[1])]
 
-# Scatter plot
 plt.figure(figsize=(8, 8))
 plt.scatter(mean_shap_train, mean_shap_val, alpha=0.7)
 
-# Add diagonal (perfect agreement)
+# diagonal = perfect agreement between train and test feature importance
 lims = [
     min(mean_shap_train.min(), mean_shap_val.min()),
     max(mean_shap_train.max(), mean_shap_val.max())
 ]
 plt.plot(lims, lims, "k--", alpha=0.8)
 
-# Labels
 plt.xlabel("Mean |SHAP| (Training set)")
 plt.ylabel("Mean |SHAP| (Test set)")
 plt.title("Training vs Testset SHAP Feature Importance")
@@ -785,11 +705,7 @@ for j, i in enumerate(top_idx):
 
 plt.show()
 
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# Pick top 20 features by validation SHAP
+# top 20 features by validation SHAP importance
 top_idx = np.argsort(mean_shap_val)[-20:]
 df_bar = pd.DataFrame({
     "Feature": np.array(feature_names)[top_idx],
@@ -797,14 +713,11 @@ df_bar = pd.DataFrame({
     "Test": mean_shap_val[top_idx]
 })
 
-# Sort by validation importance
 df_bar = df_bar.sort_values("Test", ascending=False)
 
-# Melt for seaborn
 df_melt = df_bar.melt(id_vars="Feature", var_name="Dataset", value_name="Mean |SHAP|")
 sns.set_style("whitegrid")
 
-# Plot
 plt.figure(figsize=(11, 6))
 sns.barplot(
     data=df_melt,
@@ -812,7 +725,6 @@ sns.barplot(
     hue="Dataset", dodge=True
 )
 
-#plt.title("Top 20 Features by SHAP Importance")
 plt.xlabel("Mean |SHAP| Value")
 plt.ylabel("")
 plt.legend(title="Dataset")

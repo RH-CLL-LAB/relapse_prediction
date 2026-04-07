@@ -1,13 +1,3 @@
-"""
-long_to_feature_matrix.py
-
-Main feature engineering pipeline:
-- Loads wide and long data.
-- Uses FeatureMaker to construct time-dependent features from multiple data sources.
-- Adds static predictors and outcome definitions.
-- Creates the final feature matrix and saves to 'results/feature_matrix_all.pkl'.
-"""
-
 import datetime as dt
 import numpy as np
 import pandas as pd
@@ -22,16 +12,9 @@ from lyfo_treatment_failure_prediction.feature_maker.scripts.feature_maker impor
 )
 from lyfo_treatment_failure_prediction.data_processing.wide_data import WIDE_DATA
 
-# ---------------------------------------------------------------------------
-# Configuration flags
-# ---------------------------------------------------------------------------
 CACHED_DATA = True
-INCLUDE_PROXIES = False  # not used in current script
-SINGLE_DISEASE = False   # optional filter for subtype == DLBCL
+SINGLE_DISEASE = False  # filter to DLBCL only if True
 
-# ---------------------------------------------------------------------------
-# Load test patients and data
-# ---------------------------------------------------------------------------
 test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
 
 if CACHED_DATA:
@@ -48,9 +31,6 @@ if SINGLE_DISEASE:
 
 LONG_DATA["patientid"] = LONG_DATA["patientid"].astype(int)
 
-# ---------------------------------------------------------------------------
-# Initialize FeatureMaker
-# ---------------------------------------------------------------------------
 feature_maker = FeatureMaker(
     long_data=LONG_DATA,
     wide_data=WIDE_DATA,
@@ -79,10 +59,7 @@ feature_maker = FeatureMaker(
 feature_maker._reset_all_features()
 feature_maker.specify_prediction_time_from_wide_format("date_treatment_1st_line")
 
-# ---------------------------------------------------------------------------
-# Add static features (non-temporal predictors)
-# ---------------------------------------------------------------------------
-# Exclude columns likely to leak or irrelevant for prediction
+# Columns excluded from static features: outcome-related, dates, or leakage risk
 exclusion_terms = [
     "date",
     "2nd_line",
@@ -116,9 +93,6 @@ for static_predictor in static_predictors:
     }
     feature_maker.add_static_feature(feature_spec)
 
-# ---------------------------------------------------------------------------
-# Add time-dependent features using pre-defined feature specs
-# ---------------------------------------------------------------------------
 for feature_spec in tqdm(feature_specs, desc="Adding time-dependent features"):
     lookbacks = [dt.timedelta(90), dt.timedelta(365), dt.timedelta(365 * 3)]
     src = feature_spec.get("data_source")
@@ -139,10 +113,7 @@ for feature_spec in tqdm(feature_specs, desc="Adding time-dependent features"):
         collapse_rare_conditions_to_feature=True,
     )
 
-# ---------------------------------------------------------------------------
-# Define outcome variables
-# ---------------------------------------------------------------------------
-translation_dict = {9: 0, 1: 1}  # 0 = NaN/unknown
+translation_dict = {9: 0, 1: 1}  # value 9 = unknown/missing in RKKP, treated as no relapse
 
 feature_maker.wide_data["relapse"] = feature_maker.wide_data["relapse_label"].apply(
     lambda x: translation_dict.get(x)
@@ -173,7 +144,6 @@ def define_succesful_treatment(date_death, date_relapse):
     )
 )
 
-# Add outcomes: death, relapse, and combined treatment success
 feature_maker.add_outcome_from_wide_format(
     "date_death", "dead_label", [dt.timedelta(730), dt.timedelta(365 * 5)], [MaxAggregator()]
 )
@@ -184,22 +154,19 @@ feature_maker.add_outcome_from_wide_format(
     "succesful_treatment_date", "succesful_treatment_label", [dt.timedelta(730)], [MaxAggregator()]
 )
 
-# ---------------------------------------------------------------------------
-# Main script execution
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     feature_maker.make_all_features()
 
     feature_matrix = feature_maker.create_feature_matrix(None)
 
-    # Replace missing (0) counts/sums with -1 for clarity
+    # 0 is ambiguous for counts/sums (could be missing or truly zero); use -1 as sentinel
     sum_columns = [
         c for c in feature_matrix.columns if "sum_fallback_-1" in c or "count_fallback_-1" in c
     ]
     for c in sum_columns:
         feature_matrix.loc[feature_matrix[c] == 0, c] = -1
 
-    # Replace -1 fallback in outcome columns with 0 (not dead/relapsed)
+    # Outcome columns: -1 fallback means no event observed, recode to 0
     for col in [
         "outc_dead_label_within_0_to_730_days_max_fallback_0",
         "outc_dead_label_within_0_to_1825_days_max_fallback_0",
@@ -208,7 +175,7 @@ if __name__ == "__main__":
 
     feature_matrix = feature_matrix.replace(np.NAN, -1)
 
-    # Sanitize column names (remove symbols not allowed in ML models)
+    # XGBoost rejects columns with <, >, [, ] in their names
     feature_matrix.columns = (
         feature_matrix.columns.str.replace("<", "less_than")
         .str.replace(",", "_comma_")
@@ -217,7 +184,6 @@ if __name__ == "__main__":
         .str.replace("]", "right_bracket")
     )
 
-    # Define grouping column
     feature_matrix["group"] = feature_matrix.apply(
         lambda x: f"relapse_{x['outc_relapse_within_0_to_730_days_max_fallback_0']}_"
                   f"death_{x['outc_dead_label_within_0_to_730_days_max_fallback_0']}_"
@@ -225,7 +191,6 @@ if __name__ == "__main__":
         axis=1,
     )
 
-    # Track missingness
     feature_matrix["proportion_of_missing"] = (
         feature_matrix.eq(-1).sum(axis=1) / len(feature_matrix.columns)
     )

@@ -1,48 +1,42 @@
-from sklearn.model_selection import train_test_split
+import joblib
+import shap
+
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import seaborn as sns
+
+from sklearn.calibration import CalibrationDisplay
 from sklearn.metrics import (
     f1_score,
     roc_auc_score,
     precision_score,
     recall_score,
-    auc,
     average_precision_score,
     matthews_corrcoef,
     confusion_matrix,
-    classification_report,
-)
-from tqdm import tqdm
-from imblearn.combine import SMOTETomek
-from xgboost import XGBClassifier
-
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-import xgboost
-
-
-from sklearn.calibration import calibration_curve, CalibrationDisplay
-
-from sklearn.metrics import brier_score_loss
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import (
+    brier_score_loss,
+    precision_recall_curve,
+    roc_curve,
     RocCurveDisplay,
     PrecisionRecallDisplay,
     ConfusionMatrixDisplay,
-    DetCurveDisplay,
 )
-import joblib
+from tqdm import tqdm
+from xgboost import XGBClassifier
 
-import matplotlib.patches as mpatches
+from helpers.constants import colors
+from helpers.processing_helper import (
+    clip_values,
+    check_performance,
+    check_performance_across_thresholds,
+    calculate_CNS_IPI,
+    get_features_and_outcomes,
+)
 
-from helpers.constants import *
-from helpers.processing_helper import *
-
-
-# make all math text regular
-params = {"mathtext.default": "regular"}
-plt.rcParams.update(params)
+# render math annotations in non-italic font
+plt.rcParams.update({"mathtext.default": "regular"})
 
 
 wide_data = pd.read_pickle("data/WIDE_DATA.pkl")
@@ -70,7 +64,6 @@ features = [
     "pred_RKKP_extranodal_disease_diagnosis_fallback_-1",
     "pred_RKKP_PS_diagnosis_fallback_-1",
 ]
-# lab_measurement_features = [x for x in feature_matrix.columns if "labmeasurements" in x]
 
 test = feature_matrix[feature_matrix["patientid"].isin(test_patientids)].reset_index(
     drop=True
@@ -96,7 +89,6 @@ predictor_columns = [
 ]
 
 for column in tqdm(features):
-    # this should be the way clip values is done
     clip_values(train, test, column)
 
 
@@ -118,11 +110,10 @@ for column in tqdm(features):
     none_chop_like=False,
 )
 
-## load predictions from LR and TabPFN
+# load LR and TabPFN predictions for comparison
 lr_probs = joblib.load("results/lr_predictions.pkl")
 tabpfn_probs = joblib.load("results/tabpfn_predictions.pkl")
 
-## merging predictions onto test_specific
 test["lr_probs"] = lr_probs["y_pred_proba"]
 test["tabpfn_probs"] = tabpfn_probs["y_pred_proba"]
 
@@ -131,7 +122,7 @@ test_specific = test_specific.merge(test[["patientid", "lr_probs", "tabpfn_probs
 
 bst = XGBClassifier(
     missing=-1,
-    n_estimators=3000,  # was 2000 before
+    n_estimators=3000,  # previously 2000
     learning_rate=0.01,
     max_depth=8,
     min_child_weight=3,
@@ -247,13 +238,10 @@ def stratified_bootstrap_metrics(
             precisions.append(precision_score(y_true_bs, y_pred_label_bs, zero_division=0))
             recalls.append(recall_score(y_true_bs, y_pred_label_bs, zero_division=0))
             mccs.append(matthews_corrcoef(y_true_bs, y_pred_label_bs))
-        
-        # Specificity
             cm = confusion_matrix(y_true_bs, y_pred_label_bs)
             tn, fp, fn, tp = cm.ravel()
             specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
             specificities.append(specificity)
-
         except:
             continue
 
@@ -281,18 +269,16 @@ def stratified_bootstrap_metrics(
         "mcc": summary_stats(mccs),
     }
 
-## 
-y_pred_proba = bst.predict_proba(X_test)[:, 1]  # Get probabilities for class 1
-y_pred_label = (y_pred_proba >= 0.3).astype(int)  # Apply 0.5 threshold (or whatever you used)
+y_pred_proba = bst.predict_proba(X_test)[:, 1]
+y_pred_label = (y_pred_proba >= 0.3).astype(int)
 
 results = stratified_bootstrap_metrics(y_test, y_pred_proba, y_pred_label)
 
 for metric, stats in results.items():
     print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
 
-## 
-y_pred_proba = bst.predict_proba(X_test_specific)[:, 1]  # Get probabilities for class 1
-y_pred_label = (y_pred_proba >= 0.5).astype(int)  # Apply 0.5 threshold (or whatever you used)
+y_pred_proba = bst.predict_proba(X_test_specific)[:, 1]
+y_pred_label = (y_pred_proba >= 0.5).astype(int)
 
 results = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label)
 
@@ -326,11 +312,7 @@ test_specific = test_specific.merge(
     WIDE_DATA[["patientid", "CNS_IPI_diagnosis"]]
 ).reset_index(drop=True)
 
-# NOTE: Missing IPI has been encoded as -1
-# which produces funky stuff here.
-
-# TP FP TN FN
-
+# NOTE: Missing IPI values encoded as -1 may produce incorrect predictions here.
 
 def make_NCCN_categorical(nccn):
     if pd.isnull(nccn):
@@ -420,9 +402,6 @@ first_legend = figure_axis.legend(
     title_fontsize=11,
     handletextpad=0.3
 )
-#for legend_handle in first_legend.legend_handles:
-#    legend_handle.set_sizes([30])
-
 another_legend = plt.legend(
     handles=[low_patch, intermediate_low_patch, intermediate_high_patch, high_patch],
     title="ML$_{\:All}$ Risk Groups",
@@ -454,9 +433,6 @@ for item in (
 ):
     item.set_fontsize(15)
 ax2.xaxis.label.set_fontsize(17)
-#plt.subplots_adjust(right = 0.8)
-# figure_axis.savefig("plots/test.png", dpi=300, bbox_inches="tight")
-
 plt.savefig("plots/ml_compared_to_nccn_stripplot.png", dpi=300, bbox_inches="tight")
 plt.savefig("plots/ml_compared_to_nccn_stripplot.pdf", bbox_inches="tight")
 plt.savefig("plots/ml_compared_to_nccn_stripplot.svg", bbox_inches="tight")
@@ -470,8 +446,6 @@ y_pred = [
     1 if x >= 6 else 0
     for x in test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"]
 ]
-
-import math
 
 y_pred = [
     0 if (pd.isnull(x)) or x < 4 else 1 for x in test_specific["CNS_IPI_diagnosis"]
@@ -497,8 +471,6 @@ weird_probabilities_NCCN = [
 indexes_NCCN = [x[0] for x in weird_probabilities_NCCN]
 weird_probabilities_NCCN = [x[1] for x in weird_probabilities_NCCN]
 
-
-from sklearn.metrics import precision_recall_curve, roc_curve
 
 y_pred = bst.predict_proba(X_test_specific).astype(float)
 
@@ -528,8 +500,7 @@ fpr_dlbcl, tpr_dlbcl, _ = roc_curve(y_test_specific.values, [x[1] for x in y_pre
 
 roc_auc_score_dlbcl = roc_auc_score(y_test_specific.values, [x[1] for x in y_pred])
 
-bst = xgboost.XGBClassifier()
-
+bst = XGBClassifier()
 bst.load_model("results/models/model_all.json")
 
 
@@ -657,7 +628,7 @@ precision_nccn, recall_nccn, thresholds_nccn = precision_recall_curve(
     y_test_specific.values[indexes_NCCN], weird_probabilities_NCCN
 )
 
-### find matches
+# find matching points on the ML curve at NCCN's recall and precision
 
 recall_idx = (np.abs(recall_ml - recall_nccn[6])).argmin()
 
@@ -696,8 +667,6 @@ display_ML_model = PrecisionRecallDisplay(
 display_ML_model.plot(ax=ax)
 ax.set_aspect('auto')
 
-import seaborn as sns
-
 helper_df = (
     pd.DataFrame(
         [recall_nccn[6], recall_ml[recall_idx]], [precision_nccn[6], precision_ml[recall_idx]]
@@ -733,19 +702,6 @@ pos_rate = y_test_specific.mean()  # proportion of positives
 
 ax.hlines(pos_rate, xmin=-0.02, xmax=1.02, colors="gray", linestyles="--", label=f"Chance (AP = {pos_rate:.2f})")
 
-
-# plt.plot([recall_nccn[6], recall_ml[precision_idx]],
-#          [precision_nccn[6], precision_nccn[6]],
-#          "k--", solid_capstyle="butt")
-
-# plt.plot([recall_ml[recall_idx], recall_ml[recall_idx]],
-#          [precision_nccn[6], precision_ml[recall_idx]],
-#          "k--", solid_capstyle="butt")
-
-# plt.scatter([recall_ml[precision_idx]], [precision_nccn[6]], color="black", zorder = 5, s = 5)
-# plt.scatter([recall_nccn[6]], [precision_ml[recall_idx]], color="black", zorder = 5, s = 5)
-
-
 plt.xlabel("Recall", fontsize=15)
 plt.ylabel("Precision", fontsize=15)
 plt.xticks(fontsize=13)
@@ -758,7 +714,7 @@ plt.savefig("plots/ml_compared_to_nccn_pr.png", dpi=300, bbox_inches="tight")
 plt.savefig("plots/ml_compared_to_nccn_pr.pdf", bbox_inches="tight")
 plt.savefig("plots/ml_compared_to_nccn_pr.svg", bbox_inches="tight")
 
-## SAME FOR AUC
+# ROC curve comparison
 
 
 fig, ax = plt.subplots()
@@ -914,8 +870,6 @@ y_pred = [
     for x in test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"]
 ]
 
-import math
-
 y_pred = [
     0 if x < 4 else 1
     for x in test_specific[test_specific["CNS_IPI_diagnosis"].notnull()][
@@ -974,8 +928,6 @@ print(f"MCC: {mcc}")
 print(confusion_matrix(y_test_specific.values[indexes_NCCN], y_pred))
 
 
-import shap
-
 feature_names = [
     "Performance status (diagnosis)",
     "Age (diagnosis)",
@@ -991,7 +943,7 @@ feature_names = [
     "Maximum of beta-2-microglubolin (1095 days)",
     "Maximum of neutrophilocytes (90 days)",
     "Age-adjusted IPI (diagnosis)",
-    "Number of nodal regions (diagnosis)",
+    "Count of nodal regions (diagnosis)",
     "Count of normal cell findings from pathology (1095 days)",
     "Count of hospitalizations categorized as outpatient (90 days)",
     "Count of hospitalizations categorized as written communication (365 days)",
@@ -1006,8 +958,6 @@ feature_names = [
     "Ann Arbor Stage (diagnosis)",
     "Extranodal disease (diagnosis)",
 ]
-
-[x for x in X_test_specific.columns if "extranodal" in x]
 
 feature_names_original = [
     "pred_RKKP_PS_diagnosis_fallback_-1",
@@ -1040,14 +990,12 @@ feature_names_original = [
     "pred_RKKP_extranodal_disease_diagnosis_fallback_-1",
 ]
 
-
 rename_dict = {
     feature_names_original[i]: feature_names[i] for i in range(len(feature_names))
 }
 
 X_test_specific_renamed = X_test_specific.rename(columns=rename_dict)
 
-# compute SHAP values
 explainer = shap.TreeExplainer(bst)
 shap_values = explainer(X_test_specific_renamed)
 
