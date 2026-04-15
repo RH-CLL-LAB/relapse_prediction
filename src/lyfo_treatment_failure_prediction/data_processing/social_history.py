@@ -1,18 +1,9 @@
-"""
-social_history.py — Load and clean social history data for the LYFO cohort.
-
-This version is behaviour-preserving: all logic and transformations remain
-identical to the original script. Only import paths and readability improved.
-"""
-
 from datetime import timedelta
 import pandas as pd
 
-# Package-style imports (no logic change)
 from lyfo_treatment_failure_prediction.helpers.sql_helper import (
     download_and_rename_data,
 )
-from lyfo_treatment_failure_prediction.helpers.processing_helper import *  # noqa: F403
 from lyfo_treatment_failure_prediction.data_processing.wide_data import lyfo_cohort
 
 

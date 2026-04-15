@@ -1,19 +1,5 @@
-"""
-persimune.py — Load and process PERSIMUNE microbiology and biochemistry data.
-
-Behaviour:
-- Loads microbiology analysis and culture tables.
-- Converts categorical microbiology results to numeric values.
-- Groups variable names into clinically meaningful categories (e.g. “covid”, “herpes”).
-- Adds leukocyte-related biochemistry results.
-- Produces a single dictionary `persimune_dict` with cleaned data sources.
-
-All logic, naming, and outputs are identical to the original code.
-"""
-
 import pandas as pd
 from lyfo_treatment_failure_prediction.helpers.sql_helper import download_and_rename_data
-from lyfo_treatment_failure_prediction.helpers.processing_helper import *  # noqa: F403
 from lyfo_treatment_failure_prediction.data_processing.wide_data import lyfo_cohort_strings
 
 # ---------------------------------------------------------------------------

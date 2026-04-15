@@ -4,9 +4,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from timeseriesflattener.aggregators import MaxAggregator, MinAggregator  # MinAggregator unused but kept
+from timeseriesflattener.aggregators import MaxAggregator
 
-from lyfo_treatment_failure_prediction.feature_specification import feature_specs  # noqa: F401
 from lyfo_treatment_failure_prediction.feature_maker.scripts.feature_maker_old import (
     FeatureMaker,
 )
@@ -19,15 +18,7 @@ from lyfo_treatment_failure_prediction.data_processing.preprocess import (
 from lyfo_treatment_failure_prediction.utils.config import DATA_DIR
 
 
-# Defaults chosen to exactly match the original script
 CACHED_DATA_DEFAULT = True
-INCLUDE_PROXIES_DEFAULT = False  # currently unused, kept for backwards compat
-SINGLE_DISEASE_DEFAULT = False   # currently unused, kept for backwards compat
-
-# Note: tqdm import was only used for side-effects (progress bars) in the
-# original script when iterating with .apply; here we don't need it explicitly,
-# but we keep the import to avoid any surprises if you later add progress bars.
-from tqdm import tqdm  # noqa: F401
 
 
 def _load_wide_and_long(cached_data: bool) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -51,8 +42,6 @@ def _load_wide_and_long(cached_data: bool) -> tuple[pd.DataFrame, pd.DataFrame]:
         WIDE_DATA = pd.read_pickle(wide_path)
         LONG_DATA = pd.read_pickle(long_path)
     else:
-        # Original script imported WIDE_DATA, LONG_DATA from preprocess_data
-        # when CACHED_DATA was False. Here we call the same pipeline function.
         WIDE_DATA, LONG_DATA = preprocess_data()
 
     return WIDE_DATA, LONG_DATA
@@ -62,18 +51,7 @@ def _prepare_feature_maker(
     WIDE_DATA: pd.DataFrame,
     LONG_DATA: pd.DataFrame,
 ) -> FeatureMaker:
-    """
-    Prepare FeatureMaker with static predictors and outcome definitions.
-
-    This function contains the body of the original script **before**
-    the `if __name__ == "__main__":` block.
-    """
-
-    # Convert date columns in WIDE_DATA.
-    # NOTE: The original script had a subtle bug/quirk:
-    # inside the loop it used `WIDE_DATA[date_columns]` rather than
-    # `WIDE_DATA[date_column]`. We keep this behaviour to avoid changing
-    # anything in the data.
+    # NOTE: original code uses WIDE_DATA[date_columns] (plural) in this loop — intentional
     date_columns = [x for x in WIDE_DATA.columns if "date" in x]
     for date_column in date_columns:
         WIDE_DATA[date_column] = pd.to_datetime(
@@ -133,7 +111,6 @@ def _prepare_feature_maker(
         "relapse_label"
     ].apply(lambda x: translation_dict.get(x))
 
-    # Define successful treatment (unchanged logic)
     def define_succesful_treatment(date_death, date_relapse):
         if pd.isnull(date_death) and pd.isnull(date_relapse):
             succesful_treatment_date = pd.NaT
@@ -161,7 +138,6 @@ def _prepare_feature_maker(
         )
     )
 
-    # Outcomes (same as original)
     feature_maker.add_outcome_from_wide_format(
         "date_death",
         "dead_label",
@@ -188,29 +164,15 @@ def _prepare_feature_maker(
 
 def define_and_save_test_patient_ids(
     cached_data: bool = CACHED_DATA_DEFAULT,
-    include_proxies: bool = INCLUDE_PROXIES_DEFAULT,
-    single_disease: bool = SINGLE_DISEASE_DEFAULT,
+    include_proxies: bool = False,
+    single_disease: bool = False,
     seed: int = 46,
     test_size: float = 0.15,
     output_path: Path | str | None = None,
 ) -> pd.DataFrame:
-    """
-    Reproduce the original define_test_patient_ids.py behaviour:
-    - Build features
-    - Create feature matrix
-    - Stratified train/test split
-    - Save test patient IDs to CSV.
-
-    Returns the test feature matrix.
-    """
-    # Currently these flags are not used in the original script; kept
-    # here only for signature compatibility.
-    _ = include_proxies, single_disease
-
+    """Build feature matrix, stratified split, and save test patient IDs to CSV."""
     WIDE_DATA, LONG_DATA = _load_wide_and_long(cached_data=cached_data)
     feature_maker = _prepare_feature_maker(WIDE_DATA, LONG_DATA)
-
-    # === ORIGINAL __main__ BLOCK LOGIC ===
 
     feature_maker.make_all_features()
 
@@ -252,7 +214,6 @@ def define_and_save_test_patient_ids(
         "outc_dead_label_within_0_to_1825_days_max_fallback_0",
     ] = 0
 
-    # Column name sanitisation (unchanged)
     feature_matrix.columns = feature_matrix.columns.str.replace(
         "<", "less_than"
     )

@@ -15,8 +15,13 @@ from sklearn.metrics import (
 from tqdm import tqdm
 from xgboost import XGBClassifier
 
-from helpers.constants import *
-from helpers.processing_helper import *
+from helpers.constants import supplemental_columns
+from helpers.processing_helper import (
+    calculate_CNS_IPI,
+    clip_values,
+    check_performance,
+    get_features_and_outcomes,
+)
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -62,14 +67,6 @@ col_to_leave.extend(outcome_column)
 
 ipi_cols = [x for x in feature_matrix.columns if "NCCN_" in x]
 col_to_leave.extend(ipi_cols)
-
-# (Not actually used later, but kept for completeness)
-predictor_columns = [x for x in train.columns if x not in col_to_leave]
-predictor_columns = [
-    x
-    for x in predictor_columns
-    if x not in ["pred_RKKP_subtype_fallback_-1", "pred_RKKP_hospital_fallback_-1"]
-]
 
 # ---------------------------------------------------------------------
 # Compute CNS-IPI for baseline comparisons
@@ -238,7 +235,7 @@ for i, (train_index, test_index) in enumerate(
 
     bst = XGBClassifier(
         missing=-1,
-        n_estimators=3000,  # was 2000 before
+        n_estimators=3000,
         learning_rate=0.01,
         max_depth=8,
         min_child_weight=3,
@@ -307,10 +304,6 @@ for i, (train_index, test_index) in enumerate(
     test_fold = train_splitter.iloc[test_index]
     features = features_original.copy()
 
-    # Optionally filter to DLBCL only (original script had this commented out)
-    # train_fold = train_fold[train_fold["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
-    # test_fold = test_fold[test_fold["pred_RKKP_subtype_fallback_-1"] == 0].reset_index(drop=True)
-
     features = list(features)
 
     for j in supplemental_columns:
@@ -341,7 +334,7 @@ for i, (train_index, test_index) in enumerate(
 
     bst = XGBClassifier(
         missing=-1,
-        n_estimators=3000,  # was 2000 before
+        n_estimators=3000,
         learning_rate=0.01,
         max_depth=8,
         min_child_weight=3,
@@ -350,7 +343,7 @@ for i, (train_index, test_index) in enumerate(
         colsample_bytree=0.9,
         objective="binary:logistic",
         reg_alpha=10,
-        nthread=10,  # was 6 before
+        nthread=10,
         random_state=i,
     )
 
@@ -405,5 +398,3 @@ summary = (
     .groupby("variable")
     .agg(mean=("value", "mean"), std=("value", "std"))
 )
-
-# `summary` now holds mean ± std across folds for the last experiment.

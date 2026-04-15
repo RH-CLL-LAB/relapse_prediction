@@ -1,15 +1,3 @@
-"""
-make_data_for_survival_plots.py
-
-Prepares survival analysis datasets from model predictions.
-- Loads trained XGBoost model and test datasets.
-- Computes predicted probabilities and categorical risk groups.
-- Merges predictions with clinical data (WIDE_DATA).
-- Produces KM-ready CSVs for all and under-75 cohorts.
-
-All behaviour matches the original script exactly.
-"""
-
 from datetime import timedelta
 import pandas as pd
 import numpy as np
@@ -63,12 +51,10 @@ def prepare_survival_data(test_df: pd.DataFrame, X: pd.DataFrame, output_prefix:
     y_prob = [p[1] for p in y_pred]
     y_prob_cat = [make_prediction_categorical(p) for p in y_prob]
 
-    # Binary adjustment threshold identical to original (0.2)
     y_pred_binary = [1 if p > 0.2 else 0 for p in y_prob]
     test_df = test_df.reset_index(drop=True).copy()
     test_df["y_pred"] = y_pred_binary
 
-    # Load WIDE_DATA and assign NCCN category
     wide_data = pd.read_pickle("data/WIDE_DATA.pkl")
     wide_data["NCCN_categorical"] = wide_data["NCCN_IPI_diagnosis"].apply(make_NCCN_categorical)
 
@@ -86,7 +72,6 @@ def prepare_survival_data(test_df: pd.DataFrame, X: pd.DataFrame, output_prefix:
     merged.loc[merged["date_event"].isna(), "event"] = 0
     merged.loc[merged["date_event"].isna(), "date_event"] = pd.to_datetime("2024-01-01")
 
-    # Calculate days to event and assign risk groups
     merged["days_to_event"] = (merged["date_event"] - merged["date_treatment_1st_line"]).dt.days
     merged["risk_prediction"] = y_prob_cat
     merged["y_pred_prob"] = y_prob

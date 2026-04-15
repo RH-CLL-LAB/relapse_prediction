@@ -1,17 +1,3 @@
-"""
-make_data_for_survival_plots_LR.py
-
-Generates Kaplan–Meier–ready CSVs for combined XGBoost and Logistic Regression (LR) model predictions.
-
-- Loads XGB model predictions and LR probabilities.
-- Categorizes risk predictions into groups.
-- Merges predictions with clinical outcomes (WIDE_DATA).
-- Produces survival datasets for relapse (FCR endpoint).
-- Outputs for all patients and under-75 subgroup.
-
-All behaviour matches the original script exactly.
-"""
-
 from datetime import timedelta
 import pandas as pd
 import numpy as np
@@ -71,10 +57,8 @@ def prepare_survival_data_LR(test_df: pd.DataFrame, X: pd.DataFrame, output_pref
     test_df["risk_prediction"] = y_prob_cat
     test_df["lr_categorical"] = test_df["lr_probs"].apply(make_prediction_categorical)
 
-    # Load WIDE_DATA
     wide_data = pd.read_pickle("data/WIDE_DATA.pkl")
 
-    # Merge predictions with patient data
     merged = test_df[["patientid", "y_pred", "lr_probs", "lr_categorical", "risk_prediction"]].merge(
         wide_data, on="patientid", how="left"
     )
@@ -93,11 +77,9 @@ def prepare_survival_data_LR(test_df: pd.DataFrame, X: pd.DataFrame, output_pref
     merged.loc[merged["date_event"].isna(), "event"] = 0
     merged.loc[merged["date_event"].isna(), "date_event"] = pd.to_datetime("2024-01-01")
 
-    # Time to event
     merged["days_to_event"] = (merged["date_event"] - merged["date_treatment_1st_line"]).dt.days
     merged["group"] = merged["y_pred"].apply(lambda x: 1 if x > 0 else 0)
 
-    # Output columns
     km_cols = [
         "patientid",
         "days_to_event",
@@ -109,10 +91,8 @@ def prepare_survival_data_LR(test_df: pd.DataFrame, X: pd.DataFrame, output_pref
         "age_at_tx",
     ]
 
-    # Export full cohort
     merged[km_cols].to_csv(f"results/km_data_{output_prefix}_LR.csv", index=False)
 
-    # Export under-75 subset
     merged_under_75 = merged[merged["age_at_tx"] < 75].reset_index(drop=True)
     merged_under_75[km_cols].to_csv(f"results/km_data_{output_prefix}_under_75_LR.csv", index=False)
 

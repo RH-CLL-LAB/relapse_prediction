@@ -1,7 +1,4 @@
-from helpers.sql_helper import *
-from helpers.processing_helper import *
-
-# fix dates
+import pandas as pd
 
 LYFO_AKI = pd.read_csv("/ngc/projects2/dalyca_r/clean_r/LYFO_AKI.csv")
 

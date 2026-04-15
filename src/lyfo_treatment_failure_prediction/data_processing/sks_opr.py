@@ -1,19 +1,9 @@
-"""
-sks_opr.py — Loads and processes SKS procedure and hospital referral data
-for the LYFO cohort.
-
-All transformations, merges, and filters are identical to the original version.
-Only imports, structure, and readability were improved.
-"""
-
 import pandas as pd
 
-# Package imports — logic unchanged
 from lyfo_treatment_failure_prediction.helpers.sql_helper import (
     load_data_from_table,
     download_and_rename_data,
 )
-from lyfo_treatment_failure_prediction.helpers.processing_helper import *  # noqa: F403
 from lyfo_treatment_failure_prediction.data_processing.wide_data import (
     lyfo_cohort,
     WIDE_DATA,

@@ -1,15 +1,6 @@
-"""
-pathology_specifics.py — Process pathology (SDS_pato) data into:
-- concatenated_pathology: grouped SNOMED-based categories (e.g. malign_lymphoma)
-- pathology_genes: gene alteration signals (binary)
-
-Behaviour is identical to the original script.
-"""
-
 import pandas as pd
 
 from lyfo_treatment_failure_prediction.helpers.sql_helper import load_data_from_table
-from lyfo_treatment_failure_prediction.helpers.processing_helper import *  # noqa: F403
 from lyfo_treatment_failure_prediction.data_processing.wide_data import lyfo_cohort
 from lyfo_treatment_failure_prediction.data_processing.lookup_tables import (
     SNOMED_LOOKUP_TABLE,

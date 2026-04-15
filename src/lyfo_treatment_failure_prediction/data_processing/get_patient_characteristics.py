@@ -1,15 +1,4 @@
-"""
-get_patient_characteristics.py
-
-Utility script to compute descriptive statistics for the DLBCL cohort:
-- Recomputes CNS-IPI and NCCN-IPI scores from WIDE_DATA.
-- Filters to non-test DLBCL patients.
-- Produces counts and percentages for key clinical variables.
-"""
-
-import math
 from datetime import timedelta
-import pickle as pkl  # kept for parity with original, though unused
 import pandas as pd
 
 from lyfo_treatment_failure_prediction.helpers.processing_helper import (
@@ -150,14 +139,8 @@ def get_table_from_data_na(filtered: pd.DataFrame):
     return not_percent, percent
 
 
-# ----------------------------------------------------------------------
-# Main script logic (kept at top level for identical behaviour)
-# ----------------------------------------------------------------------
-
-# Load WIDE_DATA from preprocessed pickle
 WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
 
-# Compute CNS-IPI and NCCN-IPI at diagnosis
 WIDE_DATA["CNS_IPI_diagnosis"] = WIDE_DATA.apply(
     lambda x: calculate_CNS_IPI(
         x["age_diagnosis"],
@@ -181,7 +164,6 @@ WIDE_DATA["NCCN_IPI_diagnosis"] = WIDE_DATA.apply(
     axis=1,
 )
 
-# Remove temporary IDs / incomplete rows
 WIDE_DATA = WIDE_DATA[WIDE_DATA["age_diagnosis"].notna()].reset_index(drop=True)
 
 # Exclude test-patients
@@ -189,12 +171,9 @@ test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
 filtered = WIDE_DATA[~WIDE_DATA["patientid"].isin(test_patientids)]
 filtered = filtered[filtered["subtype"] == "DLBCL"]
 
-# Compute descriptive tables
 not_percent, percent = get_table_from_data(filtered)
 na_not_percent, na_percent = get_table_from_data_na(filtered)
 
-# These variables are now available in the namespace if you run this script
-# in an interactive session / notebook-style workflow.
 __all__ = [
     "get_table_from_data",
     "get_table_from_data_na",

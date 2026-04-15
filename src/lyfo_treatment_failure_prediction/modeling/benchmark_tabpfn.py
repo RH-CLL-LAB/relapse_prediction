@@ -1,61 +1,20 @@
-"""
-benchmark_tabpfn.py
-
-Benchmark runtime and scaling behaviour of TabPFN on the LYFO feature matrix.
-
-Steps:
-- Load WIDE_DATA, feature matrix, and selected features.
-- Build train/test splits using held-out patient IDs.
-- Add supplemental features and apply clipping.
-- Convert to NumPy arrays.
-- Define benchmarking functions for runtime and prediction scaling.
-- Run a prediction scaling benchmark and print timings.
-"""
-
 import os
 import time
 
 import numpy as np
 import pandas as pd
-import shap  # noqa: F401
 import seaborn as sns
-import matplotlib.pyplot as plt  # noqa: F401
 
 from tqdm import tqdm
 from sklearn.utils import resample
-from sklearn.preprocessing import LabelEncoder  # noqa: F401
-from sklearn.model_selection import train_test_split  # noqa: F401
-from sklearn.metrics import (
-    f1_score,
-    roc_auc_score,
-    precision_score,
-    recall_score,
-    auc,
-    average_precision_score,
-    matthews_corrcoef,
-    confusion_matrix,
-    classification_report,
-    RocCurveDisplay,
-    PrecisionRecallDisplay,
-    ConfusionMatrixDisplay,
-    DetCurveDisplay,
-)
-from sklearn.calibration import calibration_curve, CalibrationDisplay
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import brier_score_loss, log_loss
-
-from imblearn.combine import SMOTETomek  # noqa: F401
-from xgboost import XGBClassifier  # noqa: F401
 
 from tabpfn import TabPFNClassifier
-from tabpfn.model_loading import load_fitted_tabpfn_model  # noqa: F401
 
-from lyfo_treatment_failure_prediction.helpers.constants import *  # noqa: F401,F403
+from lyfo_treatment_failure_prediction.helpers.constants import supplemental_columns
 from lyfo_treatment_failure_prediction.helpers.processing_helper import (
     clip_values,
     get_features_and_outcomes,
 )
-from lyfo_treatment_failure_prediction.helpers.sql_helper import *  # noqa: F401,F403
 
 sns.set_context("paper")
 
@@ -127,7 +86,6 @@ for col in supplemental_columns:
 for column in tqdm(features, desc="Clipping features"):
     clip_values(train, test, column)
 
-# Local supplemental columns (kept for parity with original script)
 supplemental_columns = [
     "pred_RKKP_hospital_fallback_-1",
     "pred_RKKP_subtype_fallback_-1",
@@ -160,16 +118,6 @@ X_train_numpy = X_train_smtom.to_numpy().astype("float32")
 X_test_numpy = X_test.to_numpy().astype("float32")
 y_train_numpy = y_train_smtom.to_numpy()
 y_test_numpy = y_test.to_numpy()
-
-# NCCN predictor columns (defined but unused, kept for parity)
-NCCN_IPIS = [
-    "pred_RKKP_age_diagnosis_fallback_-1",
-    "pred_RKKP_LDH_diagnosis_fallback_-1",
-    "pred_RKKP_AA_stage_diagnosis_fallback_-1",
-    "pred_RKKP_extranodal_disease_diagnosis_fallback_-1",
-    "pred_RKKP_PS_diagnosis_fallback_-1",
-]
-
 
 # ---------------------------------------------------------------------------
 # Benchmark helpers
@@ -248,14 +196,9 @@ def benchmark_pred_scaling(
     return results
 
 
-# ---------------------------------------------------------------------------
-# Run the scaling benchmark (same as original script)
-# ---------------------------------------------------------------------------
-
 # Example run with 60 features
 benchmark_pred_scaling(n_samples=1000, n_features=60, test_sizes=[50, 500, 2000])
 
-# Scales for optional runtime benchmarking (left commented as in original)
 scales = [
     (100, 2),
     (200, 5),   # tiny

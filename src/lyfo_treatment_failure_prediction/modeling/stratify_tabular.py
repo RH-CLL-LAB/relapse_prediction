@@ -22,44 +22,32 @@ from sklearn.metrics import (
     ConfusionMatrixDisplay,
 )
 
-# --- Custom helpers ---
 from helpers.constants import supplemental_columns
 from helpers.processing_helper import (
     get_features_and_outcomes,
     clip_values,
 )
-# Note: Move your stratified_bootstrap_metrics() helper into processing_helper.py
-# if not already done.
 
 sns.set_context("paper")
 seed = 46
 os.makedirs("plots", exist_ok=True)
 
-# ---------------------------------------------------------------------
-# 1. Load data
-# ---------------------------------------------------------------------
 WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
 feature_matrix = pd.read_pickle("results/feature_matrix_all.pkl")
 test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
 
-# Remove patients without diagnosis age
 wrong_patientids = WIDE_DATA[WIDE_DATA["age_diagnosis"].isna()]["patientid"]
 feature_matrix = feature_matrix[~feature_matrix["patientid"].isin(wrong_patientids)].reset_index(drop=True)
 feature_matrix.replace(-1, np.nan, inplace=True)
 
-# Train/test split
 test = feature_matrix[feature_matrix["patientid"].isin(test_patientids)].reset_index(drop=True)
 train = feature_matrix[~feature_matrix["patientid"].isin(test_patientids)].reset_index(drop=True)
 
-# ---------------------------------------------------------------------
-# 2. Setup features & outcome
-# ---------------------------------------------------------------------
 outcome_column = [c for c in feature_matrix.columns if "outc" in c]
 outcome = outcome_column[-1]
 
 features = pd.read_csv("results/feature_names_all.csv")["features"].tolist()
 
-# Ensure supplemental columns exist
 for col in supplemental_columns:
     if col not in features:
         features.append(col)
@@ -102,7 +90,7 @@ test = test.merge(pred_df, on=key_cols, how="left")
     test=test,
     WIDE_DATA=WIDE_DATA,
     outcome=outcome,
-    features=features,
+    feature_list=features,
     specific_immunotherapy=False,
     none_chop_like=False,
 )
@@ -238,4 +226,4 @@ plt.title(f"Subtype-specific (thr={thr_spec:.2f})")
 plt.tight_layout()
 plt.savefig("plots/cm_tabpfn_specific.pdf", bbox_inches="tight")
 
-print("\n✅ Evaluation complete. Results and plots saved in /plots.\n")
+print("Evaluation complete. Results and plots saved in /plots.")

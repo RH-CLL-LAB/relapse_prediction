@@ -1,17 +1,5 @@
-"""
-Train an XGBoost model (DLBCL-only training by default), evaluate on:
-  1) all test patients (X_test, y_test)
-  2) subtype-specific test set (X_test_specific, y_test_specific)
-
-Also computes:
-  - NCCN IPI comparators (scaled as probabilities and thresholded at 6)
-  - Bootstrap 95% CIs for key metrics
-  - Feature correlation visuals
-  - SHAP summary and bar plots
-  - Saves useful CSVs and model artifacts
-"""
-
 import os
+import shap
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -31,8 +19,7 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-# ---- helpers (fixed imports) ----
-from helpers.constants import supplemental_columns  # + colors if you need them elsewhere
+from helpers.constants import supplemental_columns
 from helpers.processing_helper import (
     get_features_and_outcomes,
     clip_values,
@@ -41,24 +28,18 @@ from helpers.processing_helper import (
     check_performance_across_thresholds,
 )
 
-# ---- viz defaults ----
 sns.set_context("paper")
 plt.rcParams.update({"mathtext.default": "regular"})
 
-# ---- params ----
 seed = 46
 DLBCL_ONLY = True  # train on DLBCL only
 
-# ---- I/O and dirs ----
 os.makedirs("plots", exist_ok=True)
 os.makedirs("results/models", exist_ok=True)
 os.makedirs("results", exist_ok=True)
 os.makedirs("tables", exist_ok=True)
 os.makedirs("data", exist_ok=True)
 
-# =============================================================================
-# 1) Load & prepare data
-# =============================================================================
 WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
 feature_matrix = pd.read_pickle("results/feature_matrix_all.pkl")
 test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
@@ -85,7 +66,6 @@ if DLBCL_ONLY and "pred_RKKP_subtype_fallback_-1" in train.columns:
 
 # pick outcome
 outcome_columns = [c for c in feature_matrix.columns if "outc" in c]
-# default: the first one (consistent with your original script)
 outcome = outcome_columns[0]
 
 # ensure supplemental columns are included
@@ -97,9 +77,6 @@ for col in supplemental_columns:
 for col in tqdm(features, desc="Clipping outliers"):
     clip_values(train, test, col)
 
-# =============================================================================
-# 2) Build matrices via helper
-# =============================================================================
 (
     X_train_smtom,
     y_train_smtom,
@@ -113,15 +90,12 @@ for col in tqdm(features, desc="Clipping outliers"):
     test=test,
     WIDE_DATA=WIDE_DATA,
     outcome=outcome,
-    features=features,
+    feature_list=features,
     specific_immunotherapy=False,
     none_chop_like=False,
-    only_DLBCL_filter=False,  # already filtered above if DLBCL_ONLY
+    only_DLBCL_filter=False,
 )
 
-# =============================================================================
-# 3) Train model
-# =============================================================================
 bst = XGBClassifier(
     n_estimators=3000,
     learning_rate=0.01,
@@ -147,9 +121,6 @@ y_pred_label_specific_03 = (y_pred_proba_specific > 0.30).astype(int)
 plot_confusion_matrix(confusion_matrix(y_test_specific.values, y_pred_label_specific_03))
 plt.savefig("plots/cm_treatment_failure_2_years_ml_all_0.3_no_chop.pdf", bbox_inches="tight")
 
-# =============================================================================
-# 4) Metric sweeps + point estimates (helpers)
-# =============================================================================
 _ = check_performance_across_thresholds(X_test, y_test, bst, y_pred_proba=[])
 f1, roc_auc, recall, specificity, precision, pr_auc, mcc = check_performance(
     X_test, y_test, bst, 0.5, y_pred_proba=[]
@@ -162,7 +133,6 @@ print(confusion_matrix(y_test.values, y_pred_test))
 ConfusionMatrixDisplay(confusion_matrix(y_test.values, y_pred_test)).plot()
 
 _ = check_performance_across_thresholds(X_test_specific, y_test_specific, bst, y_pred_proba=[])
-# your script used 0.59 here — keep that choice
 y_pred_specific_059 = (y_pred_proba_specific > 0.59).astype(int)
 test_specific["model_highrisk"] = y_pred_specific_059
 
@@ -175,9 +145,7 @@ print(f"Recall: {recall:.3f} | Precision: {precision:.3f} | Specificity: {specif
 print(confusion_matrix(y_test_specific.values, y_pred_specific_059))
 ConfusionMatrixDisplay(confusion_matrix(y_test_specific.values, y_pred_specific_059)).plot()
 
-# =============================================================================
-# 5) Bootstrap CIs (local helper)
-# =============================================================================
+
 def stratified_bootstrap_metrics(y_true, y_pred_proba, threshold, n_bootstraps=1000, seed=42):
     rng = np.random.default_rng(seed)
     y_true = np.asarray(y_true).astype(int)
@@ -221,25 +189,18 @@ def stratified_bootstrap_metrics(y_true, y_pred_proba, threshold, n_bootstraps=1
 
     return {k: summarize(v) for k, v in out.items()}
 
-# All-test bootstrap (thr=0.30 here to mirror the earlier section; adjust if needed)
+
 proba_all = bst.predict_proba(X_test)[:, 1]
-thr_all = 0.30
-ci_all = stratified_bootstrap_metrics(y_test, proba_all, thr_all)
+ci_all = stratified_bootstrap_metrics(y_test, proba_all, threshold=0.30)
 print("\n=== All test bootstrap (thr=0.30) ===")
 for k, s in ci_all.items():
     print(f"{k:12s}: {s['mean']:.3f} (95% CI: {s['ci_lower']:.3f}–{s['ci_upper']:.3f})")
 
-# DLBCL-specific bootstrap (thr=0.50 as in your script’s later section)
-proba_spec = y_pred_proba_specific
-thr_spec = 0.50
-ci_spec = stratified_bootstrap_metrics(y_test_specific, proba_spec, thr_spec)
+ci_spec = stratified_bootstrap_metrics(y_test_specific, y_pred_proba_specific, threshold=0.50)
 print("\n=== DLBCL-specific bootstrap (thr=0.50) ===")
 for k, s in ci_spec.items():
     print(f"{k:12s}: {s['mean']:.3f} (95% CI: {s['ci_lower']:.3f}–{s['ci_upper']:.3f})")
 
-# =============================================================================
-# 6) NCCN IPI comparators (scaled probabilities and label at >=6)
-# =============================================================================
 nccn_raw = test_specific["pred_RKKP_NCCN_IPI_diagnosis_fallback_-1"].copy()
 nccn_scaled = (nccn_raw / 9).astype(float)  # keep NaN where missing
 test_specific["nccn_ipi_pred_proba"] = nccn_scaled
@@ -265,15 +226,6 @@ ConfusionMatrixDisplay(confusion_matrix(y_true_nccn, label_nccn)).plot()
 plot_confusion_matrix(confusion_matrix(y_true_nccn, label_nccn))
 plt.savefig("plots/cm_treatment_failure_2_years_nccn_ipi.pdf", bbox_inches="tight")
 
-# =============================================================================
-# 7) Additional outcome variants (optional — keep minimal example)
-# =============================================================================
-# Example: use a different outcome if you need (kept from previous script)
-# y_test_alt = test_specific[outcome_columns[3]]
-
-# =============================================================================
-# 8) Feature correlations (train set, pairwise-complete)
-# =============================================================================
 X_train_renamed = X_train_smtom.copy()  # already numeric; NaNs allowed
 corr = X_train_renamed.corr(method="pearson", min_periods=2)
 # histogram of absolute pairwise corr
@@ -303,13 +255,7 @@ sns.clustermap(
 plt.savefig("plots/feature_correlation_heatmap.pdf", bbox_inches="tight")
 plt.close()
 
-# =============================================================================
-# 9) SHAP (summary + bar + stability vs train)
-# =============================================================================
-import shap  # import only where needed to speed import
 explainer = shap.TreeExplainer(bst)
-
-# For readability in figs, optionally rename columns (if you have a mapping)
 X_test_shap = X_test_specific.copy()
 
 # summary plot
@@ -365,13 +311,8 @@ plt.savefig("plots/shap_train_test_bar.png", dpi=300, bbox_inches="tight")
 plt.savefig("plots/shap_train_test_bar.pdf", bbox_inches="tight")
 plt.close()
 
-# =============================================================================
-# 10) Save artifacts
-# =============================================================================
 bst.save_model("results/models/model_all.json")
 test_specific.to_csv("results/test_specific.csv", index=False)
 test.to_csv("results/test.csv", index=False)
 X_test_specific.to_csv("results/X_test_specific.csv", index=False)
 X_test.to_csv("results/X_test.csv", index=False)
-
-print("\n✅ stratify.py complete. Plots saved to /plots and data to /results & /data.\n")

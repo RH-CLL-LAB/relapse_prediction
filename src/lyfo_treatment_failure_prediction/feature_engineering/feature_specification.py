@@ -93,7 +93,6 @@ feature_specs = [
             CountAggregator(),
             SumAggregator(),
             LatestAggregator(timestamp_col_name="timestamp"),
-            # MaxAggregator(),
         ],
         "proportion": 0.1,
     },

@@ -1,13 +1,3 @@
-"""
-laboratory_measurements.py — General lab measurements and PERSIMUNE biochemistry.
-
-Produces:
-- lab_measurements_data: cleaned numeric lab measurements with daily timestamps.
-- lab_measurements_data_all: per-patient lab-available flag before treatment.
-
-Behaviour is identical to the original script.
-"""
-
 import pandas as pd
 from tqdm import tqdm
 
@@ -16,9 +6,6 @@ from lyfo_treatment_failure_prediction.data_processing.wide_data import (
     lyfo_cohort,
     lyfo_cohort_strings,
     WIDE_DATA,
-)
-from lyfo_treatment_failure_prediction.data_processing.lookup_tables import (
-    NPU_LOOKUP_TABLE,  # kept for parity with original, even though unused
 )
 
 tqdm.pandas()
@@ -145,7 +132,6 @@ lab_measurements_data["value_numeric"] = pd.to_numeric(
     lab_measurements_data["value"], errors="coerce"
 )
 
-# Some specific corrections (unchanged from original)
 negatives = [
     "Ubeskyttet",
     "Ej KBA RGH",

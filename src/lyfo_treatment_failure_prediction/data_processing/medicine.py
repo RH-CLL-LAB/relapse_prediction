@@ -1,23 +1,9 @@
-"""
-medicine.py — Process medication data from multiple sources.
-
-This module:
-- Loads administered and prescribed medicine data.
-- Harmonizes ATC codes.
-- Computes days of medication and cumulative dosage pre-treatment.
-- Calculates polypharmacy scores.
-- Derives medicine-to-treatment timing features.
-
-All logic matches the original implementation exactly.
-"""
-
 import datetime
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
 from lyfo_treatment_failure_prediction.helpers.sql_helper import download_and_rename_data
-from lyfo_treatment_failure_prediction.helpers.processing_helper import *  # noqa: F403
 from lyfo_treatment_failure_prediction.data_processing.wide_data import lyfo_cohort, WIDE_DATA
 from lyfo_treatment_failure_prediction.data_processing.lookup_tables import ATC_LOOKUP_TABLE
 

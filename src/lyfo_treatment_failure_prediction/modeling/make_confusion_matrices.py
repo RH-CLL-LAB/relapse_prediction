@@ -5,8 +5,7 @@ import seaborn as sns
 from tqdm import tqdm
 from xgboost import XGBClassifier
 from sklearn.metrics import confusion_matrix
-from helpers.constants import *
-from helpers.processing_helper import *
+from helpers.processing_helper import clip_values, get_features_and_outcomes, plot_confusion_matrix
 
 sns.set_context("paper")
 
@@ -64,7 +63,6 @@ for col in supplemental_columns:
     if col not in features:
         features.append(col)
 
-# Clip extreme values to avoid leakage
 for col in tqdm(features, desc="Clipping features"):
     clip_values(train, test, col)
 

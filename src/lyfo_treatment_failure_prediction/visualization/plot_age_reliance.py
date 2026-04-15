@@ -1,5 +1,4 @@
 import pandas as pd
-import seaborn as sns
 
 data = pd.read_csv("results/km_data_lyfo_FCR.csv")
 

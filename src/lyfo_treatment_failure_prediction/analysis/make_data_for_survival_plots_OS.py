@@ -1,15 +1,3 @@
-"""
-make_data_for_survival_plots_OS.py
-
-Generates Kaplan–Meier–ready CSVs for overall survival (OS) analysis.
-- Loads model and test data.
-- Computes predicted probabilities and categorical risk groups.
-- Merges with WIDE_DATA clinical features.
-- Outputs survival data for full and under-75 cohorts.
-
-All logic matches the original implementation exactly.
-"""
-
 from datetime import timedelta
 import pandas as pd
 import numpy as np
@@ -73,11 +61,9 @@ def prepare_survival_data_OS(test_df: pd.DataFrame, X: pd.DataFrame, output_pref
     test_df = test_df.reset_index(drop=True).copy()
     test_df["y_pred"] = y_pred_binary
 
-    # Load WIDE_DATA
     wide_data = pd.read_pickle("data/WIDE_DATA.pkl")
     wide_data["NCCN_categorical"] = wide_data["NCCN_IPI_diagnosis"].apply(make_NCCN_categorical)
 
-    # Merge predictions with patient metadata
     merged = test_df[["patientid", "y_pred"]].merge(wide_data, on="patientid", how="left")
 
     # Define survival event: death or censoring
@@ -92,7 +78,6 @@ def prepare_survival_data_OS(test_df: pd.DataFrame, X: pd.DataFrame, output_pref
     merged["y_pred_prob"] = y_prob
     merged["group"] = merged["y_pred"].apply(lambda x: 1 if x > 0 else 0)
 
-    # Columns for output
     km_cols = [
         "patientid",
         "days_to_event",
@@ -105,10 +90,8 @@ def prepare_survival_data_OS(test_df: pd.DataFrame, X: pd.DataFrame, output_pref
         "y_pred_prob",
     ]
 
-    # Export for all ages
     merged[km_cols].to_csv(f"results/km_data_{output_prefix}_OS.csv", index=False)
 
-    # Export for under-75 subgroup
     merged_under_75 = merged[merged["age_at_tx"] < 75].reset_index(drop=True)
     merged_under_75[[c for c in km_cols if c != "y_pred_prob"]].to_csv(
         f"results/km_data_{output_prefix}_under_75_OS.csv", index=False

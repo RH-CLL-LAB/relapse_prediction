@@ -58,7 +58,6 @@ def preprocess_data(
         The two DataFrames also written to disk.
     """
 
-    # Resolve paths with backwards-compatible defaults
     ipi_path = Path(ipi_path) if ipi_path is not None else IPI_PATH
     wide_output_path = (
         Path(wide_output_path)
@@ -105,9 +104,8 @@ def preprocess_data(
     IPIs_ffill["patientid"] = IPIs["patientid"]
     IPIs_ffill = IPIs_ffill.groupby("patientid").agg("last").reset_index()
 
-    # Merge with aggregated data and WIDE_DATA (WIDE_DATA comes from imported wide_data module)
     IPIs_ffill = IPIs_ffill.merge(IPIs_concat, how="left")
-    global WIDE_DATA  # make explicit that we mutate the imported global
+    global WIDE_DATA
     WIDE_DATA = WIDE_DATA.merge(IPIs_ffill, how="left")
 
     # Define table mapping for transformation
@@ -136,7 +134,6 @@ def preprocess_data(
     }
 
     print("Loading data from data dictionary...")
-    # Download and rename data based on mapping
     data_dict = {
         table_name: download_and_rename_data(
             table_name,
@@ -161,7 +158,6 @@ def preprocess_data(
     data_dict.update(medicine_dict)
     data_dict.update(lab_data)
 
-    # Free memory (same as before)
     del persimune_dict, medicine_dict
 
     # Merge diagnoses with lookup table

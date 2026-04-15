@@ -24,9 +24,12 @@ import joblib
 from imblearn.combine import SMOTETomek
 from xgboost import XGBClassifier
 
-from helpers.constants import *
-from helpers.processing_helper import *
-from helpers.sql_helper import *
+from helpers.processing_helper import (
+    clip_values,
+    get_features_and_outcomes,
+    check_performance,
+    check_performance_across_thresholds,
+)
 
 # ---------------------------------------------------------------------
 # Configuration
@@ -79,7 +82,6 @@ col_to_leave.extend([x for x in feature_matrix.columns if "NCCN_" in x])
 
 features = list(pd.read_csv("results/feature_names_all.csv")["features"].values)
 
-# Define supplemental columns BEFORE using them
 supplemental_columns = [
     "pred_RKKP_hospital_fallback_-1",
     "pred_RKKP_subtype_fallback_-1",

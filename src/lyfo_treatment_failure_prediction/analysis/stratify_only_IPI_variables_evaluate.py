@@ -6,7 +6,6 @@ from sklearn.metrics import (
 )
 from xgboost import XGBClassifier
 
-# Load model and data
 bst = XGBClassifier()
 bst.load_model("results/model_ipi_only.json")
 data = pd.read_csv("data/test_specific_ml_ipi_and_comparators.csv")
@@ -15,7 +14,6 @@ y_true = data["outc_treatment_failure_label_within_0_to_730_days_max_fallback_0"
 y_pred_proba = data["y_pred_proba_ml_ipi"]
 y_pred_label = (y_pred_proba >= 0.5).astype(int)
 
-# Standard metrics
 f1 = f1_score(y_true, y_pred_label)
 roc_auc = roc_auc_score(y_true, y_pred_proba)
 pr_auc = average_precision_score(y_true, y_pred_proba)

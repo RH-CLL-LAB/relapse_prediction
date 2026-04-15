@@ -64,9 +64,6 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-# ---------------------------- Metric helpers ---------------------------- #
-
-
 def _binarize(proba: np.ndarray, thr: float) -> np.ndarray:
     return (proba >= thr).astype(int)
 
@@ -140,9 +137,6 @@ def make_metric_functions(
         "specificity": specificity,
         "mcc": mcc,
     }
-
-
-# ---------------------------- Bootstrap engine ---------------------------- #
 
 
 @dataclass
@@ -382,7 +376,6 @@ def bootstrap_compare(
 
 # ---------------------------------------------------------------------------
 # Script part: run all comparisons used in the paper
-# (kept as-is, just slightly DRYed up)
 # ---------------------------------------------------------------------------
 
 # Load data for main outcome (combined successful treatment)
@@ -403,7 +396,6 @@ for df in read_files:
     ]
     only_relevant_columns.append(df[colnames])
 
-# Sequential merge (same as original explicit merges)
 data = only_relevant_columns[0]
 for df in only_relevant_columns[1:]:
     data = pd.merge(data, df)

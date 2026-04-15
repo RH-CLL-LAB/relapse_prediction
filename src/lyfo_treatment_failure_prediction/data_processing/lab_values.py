@@ -1,23 +1,8 @@
-"""
-lab_values.py — Small set of lab-related features.
-
-Creates:
-- lab_data["LAB_IGHVIMGT"]: IGHV mutational status encoded as 0/1.
-- lab_data["LAB_BIOBANK_SAMPLES"]: biobank sample presence flags.
-- lab_data["LAB_Flowcytometry"]: flow cytometry presence flags.
-
-Behaviour is identical to the original script.
-"""
-
 import pandas as pd
 from tqdm import tqdm
 
 from lyfo_treatment_failure_prediction.helpers.sql_helper import download_and_rename_data
-from lyfo_treatment_failure_prediction.helpers.processing_helper import *  # noqa: F403
 from lyfo_treatment_failure_prediction.data_processing.wide_data import lyfo_cohort
-from lyfo_treatment_failure_prediction.data_processing.lookup_tables import (
-    ATC_LOOKUP_TABLE,  # noqa: F401  (import kept for parity with original)
-)
 
 tqdm.pandas()
 

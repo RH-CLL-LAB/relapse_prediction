@@ -1,13 +1,3 @@
-"""
-blood_tests.py — Process blood culture test results into numeric features.
-
-Outputs:
-- blood_tests: per-test, numeric result (0/1 or numeric where possible).
-- blood_tests_all: per-patient indicator 'all' for any blood test.
-
-Behaviour is identical to the original script.
-"""
-
 import pandas as pd
 from tqdm import tqdm
 
@@ -37,7 +27,7 @@ blood_tests = download_and_rename_data(
 # 2. Map textual results to 0/1 where possible
 # ---------------------------------------------------------------------------
 
-# First: map obvious 'not detected' / negative phrases to 0
+# map 'not detected' / negative phrases to 0
 first_negative_words = ["Ikke", "IKKE", "ikke"]
 
 for negative_word in first_negative_words:
@@ -187,7 +177,6 @@ blood_tests["value_numeric"] = pd.to_numeric(
 blood_tests.loc[blood_tests["value_numeric"].isna(), "value"] = 1
 blood_tests["value"] = pd.to_numeric(blood_tests["value"], errors="coerce")
 
-# Drop intermediate column
 blood_tests = blood_tests[[c for c in blood_tests.columns if c != "value_numeric"]]
 
 # ---------------------------------------------------------------------------

@@ -38,7 +38,6 @@ outcome = outcome_columns[-1]
 for col in tqdm(features, desc="Clipping feature values"):
     clip_values(train, test, col)
 
-# Get stratified features/outcomes
 (
     X_train_smtom,
     y_train_smtom,
@@ -52,7 +51,6 @@ for col in tqdm(features, desc="Clipping feature values"):
     specific_immunotherapy=False, none_chop_like=False,
 )
 
-# Train IPI-only model
 bst = XGBClassifier(
     missing=-1,
     n_estimators=3000,
@@ -69,7 +67,6 @@ bst = XGBClassifier(
 )
 bst.fit(X_train_smtom, y_train_smtom)
 
-# Save predictions + model
 test_specific["y_pred_proba_ml_ipi"] = bst.predict_proba(X_test_specific)[:, 1]
 os.makedirs("plots", exist_ok=True)
 

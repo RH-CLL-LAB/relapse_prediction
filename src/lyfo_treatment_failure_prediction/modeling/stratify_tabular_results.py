@@ -1,4 +1,3 @@
-from sklearn.model_selection import train_test_split
 import pandas as pd
 import numpy as np
 from sklearn.metrics import (
@@ -6,37 +5,25 @@ from sklearn.metrics import (
     roc_auc_score,
     precision_score,
     recall_score,
-    auc,
     average_precision_score,
     matthews_corrcoef,
     confusion_matrix,
-    classification_report,
-)
-
-from sklearn.calibration import calibration_curve, CalibrationDisplay
-from sklearn.metrics import brier_score_loss, log_loss
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import (
-    RocCurveDisplay,
-    PrecisionRecallDisplay,
     ConfusionMatrixDisplay,
-    DetCurveDisplay,
 )
-import shap
-
-
 from tqdm import tqdm
-from imblearn.combine import SMOTETomek
 from xgboost import XGBClassifier
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-
-from helpers.constants import *
-from helpers.processing_helper import *
-from helpers.sql_helper import *
-
 import joblib
+
+from helpers.constants import supplemental_columns
+from helpers.processing_helper import (
+    clip_values,
+    get_features_and_outcomes,
+    check_performance,
+    check_performance_across_thresholds,
+)
 
 
 sns.set_context("paper")
@@ -70,7 +57,6 @@ if DLBCL_ONLY:
 
 outcome_column = [x for x in feature_matrix if "outc" in x]
 outcome = outcome_column[-1]
-# outcome = outcome_column[0]
 col_to_leave = ["patientid", "timestamp", "pred_time_uuid", "group"]
 col_to_leave.extend(outcome_column)
 
@@ -160,7 +146,6 @@ y_pred = [1 if x > 0.5 else 0 for x in y_pred_proba]
 
 test_specific["model_highrisk"] = y_pred
 
-from sklearn.utils import resample
 
 def stratified_bootstrap_metrics(
     y_true, y_pred_proba, y_pred_label, n_bootstraps=1000, seed=42
@@ -219,18 +204,16 @@ def stratified_bootstrap_metrics(
         "mcc": summary_stats(mccs),
     }
 
-## 
-y_pred_proba = test["y_pred_proba"]  # Get probabilities for class 1
-y_pred_label = (y_pred_proba >= 0.5).astype(int)  # Apply 0.5 threshold (or whatever you used)
+y_pred_proba = test["y_pred_proba"]
+y_pred_label = (y_pred_proba >= 0.5).astype(int)
 
 results = stratified_bootstrap_metrics(y_test, y_pred_proba, y_pred_label)
 
 for metric, stats in results.items():
     print(f"{metric}: {stats['mean']:.3f} (95% CI: {stats['ci_lower']:.3f}–{stats['ci_upper']:.3f})")
 
-## 
-y_pred_proba = test_specific["y_pred_proba"]  # Get probabilities for class 1
-y_pred_label = (y_pred_proba >= 0.5).astype(int)  # Apply 0.5 threshold (or whatever you used)
+y_pred_proba = test_specific["y_pred_proba"]
+y_pred_label = (y_pred_proba >= 0.5).astype(int)
 
 results = stratified_bootstrap_metrics(y_test_specific, y_pred_proba, y_pred_label)
 

@@ -1,12 +1,23 @@
-# --- Config ---------------------------------------------------------------
-SUBTYPE_COL = "pred_RKKP_subtype_fallback_-1"   # coded as in WIDE_DATA categories
-OUTCOME = [c for c in feature_matrix.columns if "outc_" in c][-1]  # last outcome
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tqdm import tqdm
+from xgboost import XGBClassifier
+from sklearn.metrics import average_precision_score
+
+from helpers.processing_helper import clip_values
+
+WIDE_DATA = pd.read_pickle("data/WIDE_DATA.pkl")
+test_patientids = pd.read_csv("data/test_patientids.csv")["patientid"]
+feature_matrix = pd.read_pickle("results/feature_matrix_all.pkl")
+
+SUBTYPE_COL = "pred_RKKP_subtype_fallback_-1"
+OUTCOME = [c for c in feature_matrix.columns if "outc_" in c][-1]
 N_BOOT = 1000
 RANDOM_STATE = 46
 PLOT_MIN = 0.35  # lower bound of axes
 
-# --- Utilities ------------------------------------------------------------
-from sklearn.metrics import average_precision_score
 rng = np.random.default_rng(RANDOM_STATE)
 
 def ap_with_ci(y, p, n_boot=N_BOOT):
@@ -46,10 +57,9 @@ def fit_xgb(X, y, seed=RANDOM_STATE):
     clf.fit(X, y)
     return clf
 
-# --- Prepare splits and features -----------------------------------------
 features_list = list(pd.read_csv("results/feature_names_all.csv")["features"].values)
 
-# Add your supplemental columns except the subtype itself (no variance within a subtype)
+# subtype column excluded — no variance within a subtype
 supplemental_columns = ["pred_RKKP_hospital_fallback_-1", "pred_RKKP_sex_fallback_-1"]
 for col in supplemental_columns:
     if col not in features_list:
@@ -62,7 +72,7 @@ test_all  = feature_matrix[ feature_matrix["patientid"].isin(test_patientids)].r
 for col in tqdm(features_list):
     clip_values(train_all, test_all, col)
 
-# Pan-cancer (ML_All) model trained on ALL train
+# ML_All: trained on all subtypes
 X_train_all = train_all[features_list]
 y_train_all = train_all[OUTCOME]
 ml_all = fit_xgb(X_train_all, y_train_all)
