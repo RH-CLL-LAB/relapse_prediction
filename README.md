@@ -190,7 +190,6 @@ All input data is accessed via the DALY-CARE data platform. The pipeline expects
 - Diagnosis codes (ICD-10 / SKS)
 - Medication (ATC codes)
 - Pathology and radiology data
-- Socioeconomic register data
 
 ---
 
