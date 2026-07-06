@@ -199,11 +199,15 @@ All input data is accessed via the DALY-CARE data platform. The pipeline expects
 If you use this code in your research, please cite:
 
 ```bibtex
-@misc{lyfo_tfpipeline,
-  title  = {LYFO Treatment Failure Prediction Pipeline},
-  author = {Werling, M. and collaborators},
-  year   = {2025},
-  note   = {https://github.com/RH-CLL-LAB/relapse_prediction}
+@article{werling2026machine,
+  title={Machine learning enhances risk stratification and treatment failure prediction in diffuse large B-cell lymphoma},
+  author={Werling, Mikkel and Fuglkj{\ae}r, Alexander D and Brown, Peter and Niemann, Carsten U and Agius, Rudi},
+  journal={HemaSphere},
+  volume={10},
+  number={4},
+  pages={e70336},
+  year={2026},
+  publisher={Wiley Online Library}
 }
 ```
 
